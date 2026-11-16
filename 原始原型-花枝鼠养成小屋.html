@@ -1,0 +1,969 @@
+<html lang="zh-CN"><head><meta name="referrer" content="origin"><base href="https://share-cdn.traecontent.cn/6afac27fe4925e0f6ed14533/artifacts/">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>花枝鼠养成小屋</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+html,body{width:100%;min-height:100vh;background:linear-gradient(180deg,#fce8d4,#f9d4b0);font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#5a3a1f;overflow-x:hidden}
+body{display:flex;flex-direction:column;align-items:center;padding:10px 10px 20px}
+h1{font-size:22px;margin:6px 0;color:#7a4a22;text-shadow:1px 1px 0 #fff}
+#wrap{width:100%;max-width:640px;background:#f6e4c8;border-radius:14px;box-shadow:0 4px 14px rgba(122,74,34,.25);padding:10px}
+canvas{width:100%;height:auto;display:block;background:#fff0d8;border-radius:8px;image-rendering:pixelated;touch-action:none;border:2px solid #b88554}
+#lv{background:#fbe7c6;border-radius:10px;padding:6px 10px;margin:8px 0;font-size:13px;box-shadow:0 2px 6px rgba(122,74,34,.15);display:flex;align-items:center;gap:6px}
+#lv .bar{flex:1}
+#stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0}
+.stat{background:#fff6e3;border-radius:10px;padding:6px 10px;box-shadow:0 2px 6px rgba(122,74,34,.15)}
+.stat .label{font-size:12px;margin-bottom:3px;display:flex;justify-content:space-between}
+.bar{height:10px;background:#e5cfae;border-radius:6px;overflow:hidden}
+.bar>div{height:100%;border-radius:6px;transition:width .4s}
+.b1{background:#ff8dbf}.b2{background:#ffb74d}.b3{background:#64b5f6}.b4{background:#81c784}
+.skins{display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;font-size:13px}
+.skin-chip{width:36px;height:36px;border-radius:50%;border:3px solid #d98a3c;cursor:pointer;box-shadow:0 2px 0 #b4681f}
+.skin-chip.active{border-color:#e91e63;box-shadow:0 0 0 3px #ffccdd,0 2px 0 #b4681f}
+.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+button{border:none;background:#ffb366;color:#5a2f0e;padding:10px 6px;border-radius:10px;font-size:14px;font-weight:bold;box-shadow:0 3px 0 #d98a3c;cursor:pointer;min-height:44px}
+button:active{transform:translateY(2px);box-shadow:0 1px 0 #d98a3c}
+button.a{background:#aed581;box-shadow:0 3px 0 #7cb342}
+button.b{background:#90caf9;box-shadow:0 3px 0 #42a5f5}
+button.c{background:#f48fb1;box-shadow:0 3px 0 #e91e63}
+button.d{background:#ef9a9a;box-shadow:0 3px 0 #e53935}
+button.e{background:#ce93d8;box-shadow:0 3px 0 #8e24aa}
+#toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(255,141,191,.95);color:#fff;padding:10px 20px;border-radius:20px;font-size:14px;pointer-events:none;opacity:0;transition:opacity .3s;z-index:999}
+#toast.show{opacity:1}
+@media(max-width:400px){button{font-size:12px;padding:8px 4px}h1{font-size:18px}}
+</style>
+</head>
+<body>
+<h1>🐭 花枝鼠养成小屋</h1>
+<div id="wrap">
+<canvas id="c" width="600" height="450"></canvas>
+<div id="lv">等级 <b id="lvl">1</b> <span id="lvlName">小奶鼠</span><div class="bar"><div id="lvBar" style="width:0%;background:#ffd54f"></div></div><span id="expTxt">0/20</span></div>
+<div id="stats">
+<div class="stat"><div class="label">💖 开心值<span id="v1">74</span></div><div class="bar"><div id="bars1" class="b1" style="width: 74.7008%;"></div></div></div>
+<div class="stat"><div class="label">🍖 饱食度<span id="v2">65</span></div><div class="bar"><div id="bars2" class="b2" style="width: 65.7606%;"></div></div></div>
+<div class="stat"><div class="label">💧 口渴值<span id="v3">67</span></div><div class="bar"><div id="bars3" class="b3" style="width: 67.9344%;"></div></div></div>
+<div class="stat"><div class="label">✨ 干净度<span id="v4">67</span></div><div class="bar"><div id="bars4" class="b4" style="width: 67.1738%;"></div></div></div>
+</div>
+<div class="skins">更换皮肤：
+<div class="skin-chip active" style="background:#f8f8f8" data-skin="white"></div>
+<div class="skin-chip" style="background:#b0b0b0" data-skin="gray"></div>
+<div class="skin-chip" style="background:#3a3a3a" data-skin="black"></div>
+</div>
+<div class="btns">
+<button onclick="feed()">🍖 喂食</button>
+<button onclick="water()">💧 喂水</button>
+<button onclick="bath()">🛁 洗澡</button>
+<button onclick="play()">🎾 陪玩</button>
+<button class="b" onclick="cleanRoom()">🧹 打扫</button>
+<button class="a" onclick="saveGame()">💾 保存</button>
+<button class="e" onclick="loadGame()">📂 读档</button>
+<button class="d" onclick="resetGame()">🔄 重置</button>
+<button class="c" onclick="toggleEdit()">🛋 家具模式</button>
+</div>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+const W=600, H=450;
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let DPR=1;
+function fitCanvas(){
+  // 最简单方案：canvas逻辑尺寸固定600x450，CSS自动缩放到容器
+  canvas.width=600;
+  canvas.height=450;
+  // 清除任何之前可能留的变换
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.imageSmoothingEnabled=false;
+}
+window.addEventListener('resize',fitCanvas);
+
+// ======== 全局状态 ========
+const game={
+  mouse:{x:300,y:400,tx:300,ty:400,vx:0,vy:0,flip:false,anim:'walk',animT:0,act:'idle',actT:60,skin:'white'},
+  stats:{happy:80,full:70,thirst:75,clean:70},
+  level:1,exp:0,roomDirty:0,
+  furniture:[
+    {type:'house',x:40,y:290,w:80,h:70},
+    {type:'food',x:140,y:360,w:36,h:26},
+    {type:'water',x:190,y:360,w:36,h:26},
+    {type:'wheel',x:460,y:270,w:70,h:70},
+    {type:'toy',x:300,y:380,w:30,h:24}
+  ],
+  particles:[],
+  dragFurniture:null,editMode:false,mouseDown:false,downPos:null,downT:0,
+  draggingMouse:false,mouseDragOff:{x:0,y:0}
+};
+
+// ======== 场景 ========
+function drawScene(){
+  // 墙壁
+  ctx.fillStyle='#e8c9a0';
+  ctx.fillRect(0,0,W,337);
+  // 墙壁木纹
+  ctx.fillStyle='rgba(160,110,70,.08)';
+  for(let i=0;i<15;i++) ctx.fillRect(0,i*22,W,2);
+  // 地板（木屑）
+  ctx.fillStyle='#d4a574';
+  ctx.fillRect(0,337,W,H-337);
+  // 木屑
+  for(let i=0;i<60;i++){
+    const x=(i*97+23)%W, y=340+(i*41)%(H-343);
+    ctx.fillStyle=i%2?'#b88554':'#c89464';
+    ctx.fillRect(x,y,5,2);
+  }
+  // 窗户
+  ctx.fillStyle='#a8d8ff';
+  ctx.fillRect(460,30,110,80);
+  ctx.fillStyle='#7a5a3a';
+  ctx.fillRect(456,26,118,6);
+  ctx.fillRect(456,104,118,6);
+  ctx.fillRect(512,26,6,84);
+  ctx.fillStyle='rgba(255,230,150,.4)';
+  ctx.fillRect(460,30,5,80);
+  // 脏度覆盖
+  if(game.roomDirty>0){
+    ctx.fillStyle='rgba(120,80,40,'+Math.min(.3,game.roomDirty*0.002)+')';
+    ctx.fillRect(0,337,W,H-337);
+  }
+}
+
+// ======== 家具 ========
+function drawFurniture(f){
+  const x=f.x,y=f.y,w=f.w,h=f.h;
+  if(game.dragFurniture===f){
+    ctx.strokeStyle='#e91e63';
+    ctx.lineWidth=2;
+    ctx.strokeRect(x-2,y-2,w+4,h+4);
+  }
+  if(f.type==='house'){
+    ctx.fillStyle='#8a4f24';
+    ctx.beginPath();
+    ctx.moveTo(x-4,y+14);
+    ctx.lineTo(x+w/2,y-6);
+    ctx.lineTo(x+w+4,y+14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle='#b57846';
+    ctx.fillRect(x,y+10,w,h-10);
+    ctx.fillStyle='#3a2010';
+    // 椭圆门洞（用 arc+scale 代替 ellipse）
+    ctx.save();
+    ctx.translate(x+w/2,y+h-10);
+    ctx.scale(w*0.22/(w*0.28),1);
+    ctx.beginPath();
+    ctx.arc(0,0,w*0.28,Math.PI,0);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillRect(x+w/2-w*0.22,y+h-10,w*0.44,8);
+  }else if(f.type==='food'){
+    ctx.fillStyle='#8d6e63';
+    ctx.fillRect(x,y+8,w,h-8);
+    ctx.fillStyle='#a1887f';
+    ctx.fillRect(x+2,y+6,w-4,4);
+    ctx.fillStyle='#d4a04a';
+    for(let i=0;i<4;i++) ctx.fillRect(x+6+i*7,y+4,4,4);
+  }else if(f.type==='water'){
+    ctx.fillStyle='#5c6bc0';
+    ctx.fillRect(x,y+8,w,h-8);
+    ctx.fillStyle='#7986cb';
+    ctx.fillRect(x+2,y+6,w-4,4);
+    ctx.fillStyle='#64b5f6';
+    ctx.fillRect(x+4,y+4,w-8,3);
+  }else if(f.type==='wheel'){
+    const cx=x+w/2,cy=y+h/2;
+    ctx.strokeStyle='#8d6e63';
+    ctx.lineWidth=4;
+    ctx.beginPath();
+    ctx.arc(cx,cy,w*0.45,0,Math.PI*2);
+    ctx.stroke();
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.arc(cx,cy,w*0.38,0,Math.PI*2);
+    ctx.stroke();
+    const rot=(performance.now()/300)%(Math.PI*2);
+    for(let i=0;i<4;i++){
+      const a=rot+i*Math.PI/2;
+      ctx.beginPath();
+      ctx.moveTo(cx,cy);
+      ctx.lineTo(cx+Math.cos(a)*w*0.42,cy+Math.sin(a)*w*0.42);
+      ctx.stroke();
+    }
+    ctx.fillStyle='#6d4c41';
+    ctx.fillRect(cx-4,cy+w*0.45,8,6);
+  }else if(f.type==='toy'){
+    ctx.fillStyle='#ef5350';
+    ctx.beginPath();
+    ctx.arc(x+w/2,y+h/2,w/2,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.beginPath();
+    ctx.arc(x+w/2-4,y+h/2-4,4,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle='#fdd835';
+    ctx.fillRect(x+w/2-1,y+h-2,2,4);
+  }
+}
+
+// ======== 鼠鼠像素绘制（1:1 对照参考图，侧视圆滚滚，黑描边直接写进sprite） ========
+/*
+ * 字符：
+ * _ = 黑色描边（#2a1a10）
+ * B = 主毛色（白色花/灰色花/黑色花）
+ * b = 腹部浅色
+ * e = 粉色内耳
+ * R = 大红色瞳孔
+ * N = 粉色三角鼻子
+ * P = 粉色爪子
+ * T = 粉色尾巴
+ * X = 粉色腮红
+ * . = 透明
+ */
+const SPRITES={
+  stand:[ // 侧视朝前坐立（与参考图一致）
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '.......................______...',
+    '......................_RRRRRR_..',
+    '....................._RRRRRRRR_.',
+    '...._________________RRRRRRRRRR_',
+    '..._BbbbbbbbbbbbbbbbBRRRRRRRRRR_',
+    '.._BBbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbBBBBbbbbBRRRRRRRRR_',
+    '.._BBbbbbbBBBBBBBbbbbBRRRRRRRR_',
+    '.._BBbbbbBBBBBBBBBBbbbbRRRRRR_',
+    '.._BBbbbBBBBBBBBBBBBbbNNNNNN_',
+    '.._BBbbBBBBBBBBBBBBBBbNNNNN_..',
+    '..._BBBBBBBBBBBBBBBBBBBNNNN_...',
+    '...._BBBBBBBBBBBBBBBBBBNNN_....',
+    '.....___BBBBBBBBBBBBBBBNN_.....',
+    '........._PP__PP__PP___........',
+    '...........__________..........',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ],
+  walkA:[ // 走路A（前爪伸出）
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '.......................______...',
+    '......................_RRRRRR_..',
+    '....................._RRRRRRRR_.',
+    '...._________________RRRRRRRRRR_',
+    '..._BbbbbbbbbbbbbbbbBRRRRRRRRRR_',
+    '.._BBbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbBBBBbbbbBRRRRRRRRR_',
+    '.._BBbbbbbBBBBBBBbbbbBRRRRRRRR_',
+    '.._BBbbbbBBBBBBBBBBbbbbRRRRRR_',
+    '.._BBbbbBBBBBBBBBBBBbbNNNNNN_',
+    '.._BBbbBBBBBBBBBBBBBBbNNNNN_..',
+    '..._BBBBBBBBBBBBBBBBBBBNNNN_...',
+    '...._BBBBBBBBBBBBBBBBBBNNN_....',
+    '.....___BBBBBBBBBBBBBBBNN_.....',
+    '...._PP___PP_____PP____PP__....',
+    '..._______________________.....',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ],
+  walkB:[ // 走路B（后爪伸出）
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '.......................______...',
+    '......................_RRRRRR_..',
+    '....................._RRRRRRRR_.',
+    '...._________________RRRRRRRRRR_',
+    '..._BbbbbbbbbbbbbbbbBRRRRRRRRRR_',
+    '.._BBbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbBBBBbbbbBRRRRRRRRR_',
+    '.._BBbbbbbBBBBBBBbbbbBRRRRRRRR_',
+    '.._BBbbbbBBBBBBBBBBbbbbRRRRRR_',
+    '.._BBbbbBBBBBBBBBBBBbbNNNNNN_',
+    '.._BBbbBBBBBBBBBBBBBBbNNNNN_..',
+    '..._BBBBBBBBBBBBBBBBBBBNNNN_...',
+    '...._BBBBBBBBBBBBBBBBBBNNN_....',
+    '.....___BBBBBBBBBBBBBBBNN_.....',
+    '......PPPP__PP___PP______PPPP...',
+    '...._________________________...',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ],
+  happy:[ // 开心（眯眼+粉腮红+嘴巴上扬）
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '.......................______...',
+    '......................_______...',
+    '....................._______....',
+    '...._________________XX_____....',
+    '..._BbbbbbbbbbbbbbbbbX__XX_....',
+    '.._BBbbbbbbbbbbbbbbbbB_X_X_....',
+    '.._BBbbbbbbbbBBBBbbbbB__XXX_....',
+    '.._BBbbbbbBBBBBBBbbbbB__XXX_....',
+    '.._BBbbbbBBBBBBBBBBbbbbXXX_....',
+    '.._BBbbbBBBBBBBBBBBBbbNNNNN_....',
+    '.._BBbbBBBBBBBBBBBBBBbNNNN_....',
+    '..._BBBBBBBBBBBBBBBBBBBNNN_....',
+    '...._BBBBBBBBBBBBBBBBBBNN_....',
+    '.....___BBBBBBBBBBBBBBBN_.....',
+    '........._PP__PP__PP___........',
+    '...........__________..........',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ],
+  eat:[ // 低头吃东西
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '................................',
+    '........................______...',
+    '..._______________________RRRRRR_',
+    '..._BbbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbBBBBbbbbbBRRRRRRRR_',
+    '.._BBbbbbbBBBBBBBbbbbbBRRRRRRR_',
+    '.._BBbbbbBBBBBBBBBBbbbNNNNNN_...',
+    '.._BBbbbBBBBBBBBBBBBbNNNNN_....',
+    '.._BBbbBBBBBBBBBBBBBBNNNN_.....',
+    '..._BBBBBBBBBBBBBBBBBNNN_......',
+    '...._BBBBBBBBBBBBBBBBNN_.......',
+    '.....___BBBBBBBBBBBBBN_........',
+    '........._PP__PP__PP___........',
+    '...........__________..........',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ],
+  jump:[ // 蹦跶（身体隆起）
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '.......................______...',
+    '......................_RRRRRR_..',
+    '....................._RRRRRRRR_.',
+    '...._________________RRRRRRRRRR_',
+    '..._BbbbbbbbbbbbbbbbBRRRRRRRRRR_',
+    '.._BBbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbBBBBbbbbBRRRRRRRRR_',
+    '.._BBbbbbbBBBBBBBbbbbBRRRRRRRR_',
+    '.._BBbbbbBBBBBBBBBBbbbbRRRRRR_',
+    '..._BBbbbBBBBBBBBBBbbNNNNNN_',
+    '...._BBbbBBBBBBBBBBBBNNNN_..',
+    '....._BBBBBBBBBBBBBBNNN_...',
+    '......_BBBBBBBBBBBBNN_....',
+    '.......___BBBBBBBBN_.....',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ],
+  bored:[ // 无聊（耷拉脑袋）
+    '................................',
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '.......................______...',
+    '......................________..',
+    '....__________________________..',
+    '..._BbbbbbbbbbbbbbbbBRRRRRRRRRR_',
+    '.._BBbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbBBBBbbbbBRRRRRRRRR_',
+    '.._BBbbbbbBBBBBBBbbbbBRRRRRRRR_',
+    '.._BBbbbbBBBBBBBBBBbbbbRRRRRR_',
+    '.._BBbbbBBBBBBBBBBBBbbNNNNNN_',
+    '.._BBbbBBBBBBBBBBBBBBbNNNNN_..',
+    '..._BBBBBBBBBBBBBBBBBBBNNNN_...',
+    '...._BBBBBBBBBBBBBBBBBBNNN_....',
+    '.....___BBBBBBBBBBBBBBBNN_.....',
+    '........._PP__PP__PP___........',
+    '...........__________..........',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ],
+  sleep:[ // 睡觉（闭眼 + zzz）
+    '................................',
+    '.............zzz................',
+    '............z.z.z...............',
+    '.............zzz................',
+    '................................',
+    '......_________________.........',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '...._eeeeeeeeeeeeeeeeeee_.......',
+    '....._eeeeeeeeeeeeeeeee_........',
+    '......_________________.........',
+    '................................',
+    '.......................______...',
+    '......................________..',
+    '....__________________________..',
+    '..._BbbbbbbbbbbbbbbbBRRRRRRRRRR_',
+    '.._BBbbbbbbbbbbbbbbbbBRRRRRRRRR_',
+    '.._BBbbbbbbbbBBBBbbbbBRRRRRRRRR_',
+    '.._BBbbbbbBBBBBBBbbbbBRRRRRRRR_',
+    '.._BBbbbbBBBBBBBBBBbbbbRRRRRR_',
+    '.._BBbbbBBBBBBBBBBBBbbNNNNNN_',
+    '.._BBbbBBBBBBBBBBBBBBbNNNNN_..',
+    '..._BBBBBBBBBBBBBBBBBBBNNNN_...',
+    '...._BBBBBBBBBBBBBBBBBBNNN_....',
+    '.....___BBBBBBBBBBBBBBBNN_.....',
+    '........._PP__PP__PP___........',
+    '...........__________..........',
+    '................................',
+    '................................',
+    '................................',
+    '................................'
+  ]
+};
+
+const PAL={
+  white:{_:'#2a1a10',B:'#f8f8f8',b:'#ffffff',e:'#ffb5c8',R:'#e23e58',N:'#ff6a8a',P:'#ffb5c8',T:'#ffb5c8',X:'#ff9ab0'},
+  gray:{_:'#2a1a10',B:'#b8b8b8',b:'#e8e8e8',e:'#d8a8a8',R:'#e23e58',N:'#ff6a8a',P:'#ffb5c8',T:'#d8a8a8',X:'#ff9ab0'},
+  black:{_:'#2a1a10',B:'#3a3a3a',b:'#5a5a5a',e:'#6a3a3a',R:'#e23e58',N:'#ff6a8a',P:'#ffb5c8',T:'#6a3a3a',X:'#ff9ab0'}
+};
+
+function drawMouse(){
+  const m=game.mouse;
+  const pal=PAL[m.skin]||PAL.white;
+
+  let key='stand';
+  if(m.anim==='walk') key=(Math.floor(m.animT/8)%2===0)?'walkA':'walkB';
+  else if(m.act==='pet') key='happy';
+  else if(m.act==='happy') key='happy';
+  else if(m.act==='eat') key='eat';
+  else if(m.act==='jump') key='jump';
+  else if(m.act==='sleep') key='sleep';
+  else if(m.bored) key='bored';
+
+  const sprite=SPRITES[key]||SPRITES.stand;
+  const rows=sprite.length;
+  const cols=sprite[0].length;
+  const PX=3;
+
+  // 计算真实底部
+  let bottomRow=rows-1;
+  for(let r=rows-1;r>=0;r--){
+    if(sprite[r].replace(/\./g,'').length>0){ bottomRow=r; break; }
+  }
+
+  const left=m.x - (cols*PX)/2;
+  const top=m.y - (bottomRow+1)*PX;
+
+  // 阴影
+  ctx.fillStyle='rgba(0,0,0,.25)';
+  ctx.save();
+  ctx.translate(m.x,m.y+3);
+  ctx.scale(1,4/(cols*PX*0.42));
+  ctx.beginPath();
+  ctx.arc(0,0,cols*PX*0.42,0,Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // 画尾巴（粉色长尾巴，从身体后方拖出，末端弯起来）
+  // 身体右下部位
+  const tailBaseX = m.flip ? left+PX : left + cols*PX - PX*2;
+  const tailBaseY = top + Math.floor(bottomRow*0.75)*PX;
+  const tailColor = pal.T;
+  ctx.fillStyle=tailColor;
+  // 尾巴主段（朝身体后方延伸一段）
+  const tailDir = m.flip ? -1 : 1;
+  ctx.fillRect(tailBaseX, tailBaseY, tailDir*PX*5, PX);
+  // 尾巴向下拖
+  ctx.fillRect(tailBaseX + tailDir*PX*5, tailBaseY, tailDir*PX, PX*6);
+  // 尾巴末端弯回来（小勾）
+  ctx.fillRect(tailBaseX + tailDir*PX*4, tailBaseY+PX*5, tailDir*PX, PX);
+  ctx.fillRect(tailBaseX + tailDir*PX*3, tailBaseY+PX*4, tailDir*PX, PX);
+
+  // 再画一遍鼠鼠（覆盖尾巴上方的身体，看起来是尾巴从身体下方穿出来）
+  for(let r=0;r<rows;r++){
+    const row=sprite[r];
+    for(let c=0;c<cols;c++){
+      const ch=row[c];
+      if(ch==='.') continue;
+      const col=pal[ch];
+      if(!col) continue;
+      let dx=left+c*PX;
+      const dy=top+r*PX;
+      if(m.flip) dx=m.x - (cols*PX)/2 + (cols-c-1)*PX;
+      ctx.fillStyle=col;
+      ctx.fillRect(Math.round(dx),Math.round(dy),PX,PX);
+    }
+  }
+}
+
+// ======== 鼠鼠AI ========
+function updateMouse(dt){
+  const m=game.mouse;
+  // 被拖动时暂停 AI
+  if(game.draggingMouse){ return; }
+
+  m.animT+=dt*60;
+  if(m.actT>0) m.actT-=dt*60;
+  else m.act='idle';
+
+  // 无聊检测（触发 bored sprite）
+  const minStat=Math.min(game.stats.happy,game.stats.full,game.stats.thirst,game.stats.clean);
+  m.bored=minStat<25;
+
+  // 走过去
+  if(m.anim==='walk'){
+    const dx=m.tx-m.x, dy=m.ty-m.y;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if(d<2){
+      m.anim='idle';
+      m.animT=0;
+      const r=Math.random();
+      const happy=minStat>50;
+      if(r<0.3){ m.act='idle'; m.actT=60+Math.random()*60; }
+      else if(r<0.5 && happy){ m.act='happy'; m.actT=50; }
+      else if(r<0.65 && happy){ m.act='jump'; m.actT=40; }
+      else if(r<0.75){ m.act='eat'; m.actT=40; }
+      else if(r<0.85 && !happy){ m.act='sleep'; m.actT=80; }
+      else { m.act='idle'; m.actT=100; }
+    } else {
+      const spd=1.6;
+      m.vx=(dx/d)*spd; m.vy=(dy/d)*spd;
+      m.x+=m.vx*dt*60; m.y+=m.vy*dt*60;
+      if(m.vx<-0.1) m.flip=true;
+      else if(m.vx>0.1) m.flip=false;
+    }
+  } else {
+    if(Math.random()<0.015){
+      m.tx=60+Math.random()*(W-120);
+      m.ty=360+Math.random()*50;
+      m.anim='walk';
+    }
+  }
+
+  // 边界
+  m.x=Math.max(40,Math.min(W-40,m.x));
+  m.y=Math.max(360,Math.min(H-30,m.y));
+
+  // 碰撞家具
+  for(const f of game.furniture){
+    if(f.type==='wheel') continue;
+    if(m.x+20>f.x && m.x-20<f.x+f.w && m.y+14>f.y && m.y-28<f.y+f.h){
+      if(m.tx<f.x){ m.x=f.x-22; m.tx-=30; }
+      else { m.x=f.x+f.w+22; m.tx+=30; }
+      if(m.ty<f.y){ m.y=f.y-15; m.ty-=20; }
+      else if(m.ty>f.y+f.h){ m.y=f.y+f.h+15; m.ty+=20; }
+    }
+  }
+}
+
+// ======== 粒子 ========
+function spawnHearts(x,y){
+  for(let i=0;i<6;i++){
+    game.particles.push({type:'heart',x:x+(Math.random()-0.5)*20,y:y-10,vx:(Math.random()-0.5)*2,vy:-1-Math.random()*2,life:60+Math.random()*20,max:80,color:['#ff8dbf','#ff6aa0','#ffc0d8'][Math.floor(Math.random()*3)]});
+  }
+}
+function spawnStars(x,y,color='#ffd54f'){
+  for(let i=0;i<8;i++){
+    game.particles.push({type:'star',x:x+(Math.random()-0.5)*30,y:y-5,vx:(Math.random()-0.5)*3,vy:-Math.random()*2-0.5,life:50+Math.random()*30,max:80,color});
+  }
+}
+function spawnBubbles(x,y){
+  for(let i=0;i<12;i++){
+    game.particles.push({type:'bubble',x:x+(Math.random()-0.5)*30,y:y+(Math.random()-0.5)*10,vx:(Math.random()-0.5)*1,vy:-1-Math.random()*1.5,life:60+Math.random()*40,max:100});
+  }
+}
+function spawnSparkle(x,y){
+  for(let i=0;i<20;i++){
+    game.particles.push({type:'sparkle',x:x+20+Math.random()*40,y:y+10+Math.random()*30,vx:(Math.random()-0.5)*4,vy:(Math.random()-0.5)*4,life:40+Math.random()*30,max:70,color:['#ffd54f','#fff176','#ffffff','#ff80ab'][Math.floor(Math.random()*4)]});
+  }
+}
+function updateParticles(){
+  for(let i=game.particles.length-1;i>=0;i--){
+    const p=game.particles[i];
+    p.x+=p.vx; p.y+=p.vy;
+    if(p.type==='heart') p.vy-=0.03;
+    if(p.type==='bubble'){ p.vy*=0.97; p.vx+=Math.sin(p.x*0.1)*0.05; }
+    if(p.type==='sparkle') p.vy+=0.05;
+    p.life--;
+    if(p.life<=0) game.particles.splice(i,1);
+  }
+}
+function drawParticles(){
+  for(const p of game.particles){
+    ctx.globalAlpha=Math.min(1,p.life/p.max);
+    if(p.type==='heart'){
+      ctx.fillStyle=p.color;
+      ctx.fillRect(p.x-2,p.y-2,4,4);
+      ctx.fillRect(p.x-3,p.y-1,2,2);
+      ctx.fillRect(p.x+1,p.y-1,2,2);
+    } else if(p.type==='star'){
+      ctx.fillStyle=p.color;
+      ctx.fillRect(p.x,p.y-3,1,6);
+      ctx.fillRect(p.x-3,p.y,6,1);
+    } else if(p.type==='bubble'){
+      ctx.strokeStyle='#a0d8ff';
+      ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,3+Math.random()*2,0,Math.PI*2);
+      ctx.stroke();
+    } else if(p.type==='sparkle'){
+      ctx.fillStyle=p.color;
+      ctx.fillRect(p.x-1,p.y-1,2,2);
+    }
+  }
+  ctx.globalAlpha=1;
+}
+
+// ======== 状态与等级 ========
+function updateStats(dt){
+  const d=dt*60;
+  game.stats.happy=Math.max(0,game.stats.happy-0.015*d);
+  game.stats.full=Math.max(0,game.stats.full-0.012*d);
+  game.stats.thirst=Math.max(0,game.stats.thirst-0.02*d);
+  game.stats.clean=Math.max(0,game.stats.clean-0.008*d);
+  game.roomDirty=Math.min(100,game.roomDirty+0.005*d);
+  if(game.roomDirty>50) game.stats.clean=Math.max(0,game.stats.clean-0.003*d);
+  if(Math.min(game.stats.happy,game.stats.full,game.stats.thirst,game.stats.clean)<20)
+    game.stats.happy=Math.max(0,game.stats.happy-0.008*d);
+  updateUI();
+}
+function updateUI(){
+  document.getElementById('v1').textContent=Math.floor(game.stats.happy);
+  document.getElementById('v2').textContent=Math.floor(game.stats.full);
+  document.getElementById('v3').textContent=Math.floor(game.stats.thirst);
+  document.getElementById('v4').textContent=Math.floor(game.stats.clean);
+  document.getElementById('bars1').style.width=game.stats.happy+'%';
+  document.getElementById('bars2').style.width=game.stats.full+'%';
+  document.getElementById('bars3').style.width=game.stats.thirst+'%';
+  document.getElementById('bars4').style.width=game.stats.clean+'%';
+  document.getElementById('lvl').textContent=game.level;
+  const need=game.level*20;
+  document.getElementById('lvBar').style.width=(game.exp/need*100)+'%';
+  document.getElementById('expTxt').textContent=Math.floor(game.exp)+'/'+need;
+  const names=['小奶鼠','活泼小鼠','机灵小鼠','大明星','鼠鼠王','传奇鼠'];
+  document.getElementById('lvlName').textContent=names[Math.min(names.length-1,game.level-1)];
+}
+function addExp(n){
+  game.exp+=n;
+  while(game.exp>=game.level*20){
+    game.exp-=game.level*20;
+    game.level++;
+    toast('🎉 升级啦！Lv.'+game.level);
+    spawnSparkle(game.mouse.x,game.mouse.y);
+  }
+}
+function toast(t){
+  const el=document.getElementById('toast');
+  el.textContent=t; el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t=setTimeout(()=>el.classList.remove('show'),1500);
+}
+
+// ======== 按钮 ========
+function feed(){ game.stats.full=100; addExp(3); toast('🍖 吃饱啦！'); game.mouse.act='eat'; game.mouse.actT=120; spawnStars(game.mouse.x,game.mouse.y,'#ffb74d'); }
+function water(){ game.stats.thirst=100; addExp(2); toast('💧 喝好啦！'); game.mouse.act='eat'; game.mouse.actT=90; spawnStars(game.mouse.x,game.mouse.y,'#64b5f6'); }
+function bath(){ game.stats.clean=100; addExp(4); toast('🛁 洗香香！'); game.mouse.act='happy'; game.mouse.actT=100; spawnBubbles(game.mouse.x,game.mouse.y); }
+function play(){ game.stats.happy=Math.min(100,game.stats.happy+25); addExp(5); toast('🎾 一起玩！'); game.mouse.act='jump'; game.mouse.actT=100; spawnHearts(game.mouse.x,game.mouse.y); }
+function cleanRoom(){ game.roomDirty=0; game.stats.clean=Math.min(100,game.stats.clean+15); addExp(2); toast('🧹 干净啦！'); }
+function saveGame(){
+  const data={stats:game.stats,level:game.level,exp:game.exp,roomDirty:game.roomDirty,
+    mouse:{x:game.mouse.x,y:game.mouse.y,skin:game.mouse.skin},furniture:game.furniture};
+  localStorage.setItem('mrSave',JSON.stringify(data));
+  toast('💾 存档成功');
+}
+function loadGame(){
+  const raw=localStorage.getItem('mrSave');
+  if(!raw){ toast('❌ 没存档'); return; }
+  try{
+    const d=JSON.parse(raw);
+    const s=d.stats;
+    if(!s||(s.happy<=0&&s.full<=0&&s.thirst<=0&&s.clean<=0)){ toast('❌ 存档坏了'); localStorage.removeItem('mrSave'); return; }
+    game.stats={happy:Math.max(20,Math.min(100,s.happy)),full:Math.max(20,Math.min(100,s.full)),thirst:Math.max(20,Math.min(100,s.thirst)),clean:Math.max(20,Math.min(100,s.clean))};
+    game.level=Math.max(1,d.level||1); game.exp=Math.max(0,d.exp||0); game.roomDirty=Math.max(0,Math.min(100,d.roomDirty||0));
+    if(d.mouse){ game.mouse.skin=d.mouse.skin||'white'; game.mouse.x=Math.max(60,Math.min(W-60,d.mouse.x||300)); game.mouse.y=Math.max(370,Math.min(H-30,d.mouse.y||400)); }
+    if(d.furniture&&d.furniture.length>=3) game.furniture=d.furniture;
+    applySkinUI(); updateUI(); toast('📂 读档成功');
+  }catch(e){ toast('❌ 读档失败'); }
+}
+function resetGame(){
+  if(!confirm('确定重置全部吗？')) return;
+  localStorage.removeItem('mrSave');
+  game.stats={happy:80,full:70,thirst:75,clean:70};
+  game.level=1; game.exp=0; game.roomDirty=0;
+  game.mouse.skin='white'; game.mouse.x=300; game.mouse.y=400;
+  game.furniture=[
+    {type:'house',x:40,y:290,w:80,h:70},
+    {type:'food',x:140,y:360,w:36,h:26},
+    {type:'water',x:190,y:360,w:36,h:26},
+    {type:'wheel',x:460,y:270,w:70,h:70},
+    {type:'toy',x:300,y:380,w:30,h:24}
+  ];
+  applySkinUI(); updateUI(); toast('🔄 已重置');
+}
+function toggleEdit(){ game.editMode=!game.editMode; toast(game.editMode?'🛋 家具模式':'退出家具模式'); }
+function applySkinUI(){
+  document.querySelectorAll('.skin-chip').forEach(c=>c.classList.toggle('active',c.dataset.skin===game.mouse.skin));
+}
+document.querySelectorAll('.skin-chip').forEach(c=>{
+  c.addEventListener('click',()=>{ game.mouse.skin=c.dataset.skin; applySkinUI(); spawnSparkle(game.mouse.x,game.mouse.y); toast('✨ 换装啦'); });
+});
+
+// ======== 画布坐标 ========
+function cvPos(evt){
+  const r=canvas.getBoundingClientRect();
+  const cx=evt.touches?evt.touches[0].clientX:evt.clientX;
+  const cy=evt.touches?evt.touches[0].clientY:evt.clientY;
+  return{x:(cx-r.left)/r.width*W,y:(cy-r.top)/r.height*H};
+}
+function findFurn(p){
+  for(let i=game.furniture.length-1;i>=0;i--){
+    const f=game.furniture[i];
+    if(p.x>=f.x&&p.x<=f.x+f.w&&p.y>=f.y&&p.y<=f.y+f.h) return f;
+  } return null;
+}
+canvas.addEventListener('mousedown',onDown);
+canvas.addEventListener('mousemove',onMove);
+canvas.addEventListener('mouseup',onUp);
+canvas.addEventListener('mouseleave',onUp);
+canvas.addEventListener('touchstart',onDown,{passive:false});
+canvas.addEventListener('touchmove',onMove,{passive:false});
+canvas.addEventListener('touchend',onUp);
+
+function onDown(e){
+  e.preventDefault();
+  const p=cvPos(e);
+  game.downPos=p; game.downT=Date.now();
+  if(game.editMode){
+    const f=findFurn(p);
+    if(f){ game.dragFurniture=f; game.dragOff={x:p.x-f.x,y:p.y-f.y}; }
+  } else {
+    const m=game.mouse;
+    if(Math.abs(p.x-m.x)<45 && Math.abs(p.y-m.y)<50){
+      game.mouseDown=true;
+      game.draggingMouse=false; // 还不确定是抚摸还是拖动
+      game.mouseDragOff={x:p.x-m.x,y:p.y-m.y};
+      game.mouse.anim='idle'; // 停住
+    }
+  }
+}
+function onMove(e){
+  e.preventDefault();
+  const p=cvPos(e);
+  if(game.dragFurniture){
+    const f=game.dragFurniture;
+    f.x=Math.max(0,Math.min(W-f.w,p.x-game.dragOff.x));
+    f.y=Math.max(260,Math.min(H-f.h-4,p.y-game.dragOff.y));
+  } else if(game.mouseDown){
+    const d=Math.sqrt((p.x-game.downPos.x)*(p.x-game.downPos.x)+(p.y-game.downPos.y)*(p.y-game.downPos.y));
+    if(d>8 || Date.now()-game.downT>200){
+      game.draggingMouse=true;
+    }
+    if(game.draggingMouse){
+      const m=game.mouse;
+      m.x=Math.max(30,Math.min(W-30,p.x-game.mouseDragOff.x));
+      m.y=Math.max(340,Math.min(H-20,p.y-game.mouseDragOff.y));
+      m.tx=m.x; m.ty=m.y;
+      m.flip=p.x<game.downPos.x;
+      m.anim='idle';
+    }
+  }
+}
+function onUp(e){
+  if(game.dragFurniture){ game.dragFurniture=null; return; }
+  if(game.mouseDown){
+    const p=cvPos(e.changedTouches?e.changedTouches[0]:e);
+    const dt=Date.now()-game.downT;
+    const d=Math.sqrt((p.x-game.downPos.x)*(p.x-game.downPos.x)+(p.y-game.downPos.y)*(p.y-game.downPos.y));
+    if(game.draggingMouse){
+      // 拖拽结束，让鼠鼠在新位置开始走动
+      game.mouse.flip=p.x<game.downPos.x;
+      game.mouse.anim='idle';
+      toast('🐭 鼠鼠被你抱过去了！');
+    } else if(dt<400 && d<15){
+      // 抚摸
+      const m=game.mouse;
+      m.flip=p.x<m.x;
+      game.stats.happy=Math.min(100,game.stats.happy+6);
+      addExp(1);
+      m.act='pet'; m.actT=40;
+      spawnHearts(m.x,m.y);
+    }
+    game.mouseDown=false;
+    game.draggingMouse=false;
+  }
+}
+
+// ======== 主循环 ========
+let lastT=0, autoSave=0;
+function loop(t){
+  let dt=0;
+  try{
+    dt=Math.min(0.05,(t-lastT)/1000);
+    lastT=t;
+    updateMouse(dt); updateStats(dt); updateParticles();
+    autoSave+=dt;
+    if(autoSave>15){
+      autoSave=0;
+      localStorage.setItem('mrSave',JSON.stringify({stats:game.stats,level:game.level,exp:game.exp,roomDirty:game.roomDirty,
+        mouse:{x:game.mouse.x,y:game.mouse.y,skin:game.mouse.skin},furniture:game.furniture}));
+    }
+    if(game.mouse.x<40||game.mouse.x>W-40||game.mouse.y<360||game.mouse.y>H-20){ game.mouse.x=300; game.mouse.y=400; }
+
+    ctx.clearRect(0,0,W,H);
+    drawScene();
+    // 调试色条（在drawScene之后画，不会被覆盖）
+    ctx.fillStyle='#00ff00'; ctx.fillRect(0,0,18,18);
+
+    const bg=['wheel','house'], fg=['food','water','toy'];
+    for(const f of game.furniture) if(bg.indexOf(f.type)>=0) drawFurniture(f);
+    ctx.fillStyle='#0080ff'; ctx.fillRect(20,0,18,18);
+
+    drawMouse();
+    ctx.fillStyle='#ff0000'; ctx.fillRect(40,0,18,18);
+
+    for(const f of game.furniture) if(fg.indexOf(f.type)>=0) drawFurniture(f);
+    drawParticles();
+    ctx.fillStyle='#ffd54f'; ctx.fillRect(60,0,18,18);
+  }catch(e){
+    // 把错误画到canvas上让用户能看到
+    try{
+      ctx.fillStyle='#ff0000';
+      ctx.fillRect(0,0,W,30);
+      ctx.fillStyle='#fff';
+      ctx.font='14px sans-serif';
+      ctx.fillText('ERR:'+e.message.substring(0,50),5,20);
+    }catch(e2){}
+  }
+  requestAnimationFrame(loop);
+}
+
+
+// ======== 启动 ========
+function safeLS(key,val){
+  try{
+    if(val===undefined) return localStorage.getItem(key);
+    if(val===null) localStorage.removeItem(key);
+    else localStorage.setItem(key,val);
+  }catch(e){}
+  return val===undefined?null:undefined;
+}
+function start(){
+  try{
+    fitCanvas();
+    // 先在canvas上画个启动标记，确认canvas能用
+    ctx.fillStyle='#000';
+    ctx.fillRect(100,100,400,200);
+    ctx.fillStyle='#fff';
+    ctx.font='20px sans-serif';
+    ctx.fillText('canvas OK',180,220);
+  }catch(e){
+    // canvas彻底不能用
+    alert('Canvas初始化失败:'+e.message);
+    return;
+  }
+  safeLS('mouseSave',null); // 清旧坏存档
+  const raw=safeLS('mrSave');
+  let loaded=false;
+  if(raw){
+    try{
+      const d=JSON.parse(raw);
+      const s=d.stats;
+      if(s&&(s.happy>0||s.full>0||s.thirst>0||s.clean>0)){
+        game.stats={happy:Math.max(20,Math.min(100,s.happy)),full:Math.max(20,Math.min(100,s.full)),thirst:Math.max(20,Math.min(100,s.thirst)),clean:Math.max(20,Math.min(100,s.clean))};
+        game.level=Math.max(1,d.level||1); game.exp=Math.max(0,d.exp||0); game.roomDirty=Math.max(0,Math.min(100,d.roomDirty||0));
+        if(d.mouse){ game.mouse.skin=d.mouse.skin||'white'; game.mouse.x=Math.max(60,Math.min(W-60,d.mouse.x||300)); game.mouse.y=Math.max(370,Math.min(H-30,d.mouse.y||400)); }
+        if(d.furniture&&d.furniture.length>=3) game.furniture=d.furniture;
+        loaded=true;
+      }
+    }catch(e){}
+  }
+  if(!loaded){
+    game.stats={happy:80,full:70,thirst:75,clean:70};
+    game.level=1; game.exp=0; game.roomDirty=0; game.mouse.skin='white';
+  }
+  game.mouse.x=Math.max(60,Math.min(W-60,game.mouse.x));
+  game.mouse.y=Math.max(370,Math.min(H-30,game.mouse.y));
+  game.mouse.tx=game.mouse.x; game.mouse.ty=game.mouse.y;
+  game.particles=[];
+  applySkinUI(); updateUI();
+  requestAnimationFrame(function(t){lastT=t; loop(t);});
+}
+window.addEventListener('load',start);
+</script>
+
+
+</body></html>
