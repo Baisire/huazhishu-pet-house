@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>花枝鼠养成小屋 · 测试版</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #2b1d14;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    user-select: none;
+  }
+  #game {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+  }
+  /* 竖屏提示：本项目是横屏游戏 */
+  #rotate {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: #2b1d14;
+    color: #f7e9cf;
+    font: 14px/1.8 "Microsoft YaHei", sans-serif;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  #rotate .box { padding: 24px; }
+  #rotate .icon { font-size: 34px; display: block; margin-bottom: 10px; }
+  @media (orientation: portrait) and (max-width: 900px) {
+    #rotate { display: flex; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="rotate">
+  <div class="box">
+    <span class="icon">⟳</span>
+    请横屏游玩<br>
+    把手机转过来，小屋就是全屏的
+  </div>
+</div>
+
+<script src="src/config/gameConfig.js"></script>
+<script src="src/platform/platform.js"></script>
+<script src="src/data/save.js"></script>
+<script src="src/core/state.js"></script>
+<script src="src/view/scene.js"></script>
+<script src="src/view/mouse.js"></script>
+<script src="src/view/effects.js"></script>
+<script src="src/ui/hud.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>
