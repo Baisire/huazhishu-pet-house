@@ -15,33 +15,36 @@ HZ.HUD = (function () {
     ctx.font = (bold ? 'bold ' : '') + size + 'px "Microsoft YaHei", sans-serif';
   }
 
-  function roundRect(ctx, x, y, w, h, r) {
-    const rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
+  // 像素风方框：直角 + 2px 描边 + 硬投影，替代圆角半透明面板
+  function pixelBox(ctx, x, y, w, h, opts) {
+    opts = opts || {};
+    const fill = opts.fill || 'rgba(48,30,17,0.94)';
+    const border = opts.border || 'rgba(232,196,138,0.80)';
+
+    ctx.fillStyle = 'rgba(0,0,0,0.34)';
+    ctx.fillRect(x + 2, y + 2, w, h);
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y, w, h);
+
+    ctx.fillStyle = border;
+    ctx.fillRect(x, y, w, 2);
+    ctx.fillRect(x, y + h - 2, w, 2);
+    ctx.fillRect(x, y, 2, h);
+    ctx.fillRect(x + w - 2, y, 2, h);
   }
 
   function panelBox(ctx, x, y, w, h) {
-    ctx.fillStyle = P.panel;
-    roundRect(ctx, x, y, w, h, 6);
-    ctx.fill();
-    ctx.strokeStyle = P.panelLine;
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    pixelBox(ctx, x, y, w, h);
   }
 
   function layout(vw, vh) {
-    const btnW = 62, btnH = 30, gap = 6;
+    const btnW = 62, btnH = 28, gap = 6;
     const visible = C.actions.filter(function (a) { return !a.hidden; });
     const count = visible.length + 1;
     const total = btnW * count + gap * (count - 1);
     const startX = Math.round((vw - total) / 2);
-    const btnY = vh - btnH - 10;
+    const btnY = vh - btnH - 6;
 
     const buttons = visible.map(function (a, i) {
       return { kind: 'care', id: a.id, label: a.name, x: startX + i * (btnW + gap), y: btnY, w: btnW, h: btnH };
@@ -52,9 +55,9 @@ HZ.HUD = (function () {
     });
 
     const dev = [
-      { kind: 'save', label: '存档', x: 8, y: vh - 20, w: 36, h: 14 },
-      { kind: 'load', label: '读档', x: 48, y: vh - 20, w: 36, h: 14 },
-      { kind: 'panel', name: 'reset', label: '重置', x: 88, y: vh - 20, w: 36, h: 14 }
+      { kind: 'save', label: '存档', x: 8, y: 78, w: 36, h: 14 },
+      { kind: 'load', label: '读档', x: 48, y: 78, w: 36, h: 14 },
+      { kind: 'panel', name: 'reset', label: '重置', x: 88, y: 78, w: 36, h: 14 }
     ];
 
     return {
@@ -237,17 +240,22 @@ HZ.HUD = (function () {
   }
 
   function buttonBase(ctx, b, ready, lowPulse) {
-    ctx.fillStyle = ready ? 'rgba(58,39,24,0.82)' : 'rgba(30,20,13,0.80)';
-    roundRect(ctx, b.x, b.y, b.w, b.h, 7);
-    ctx.fill();
+    pixelBox(ctx, b.x, b.y, b.w, b.h, {
+      fill: ready ? 'rgba(64,42,24,0.96)' : 'rgba(36,23,13,0.94)',
+      border: ready ? 'rgba(240,206,152,0.90)' : 'rgba(138,108,78,0.55)'
+    });
+
+    // 顶部高光：像素按钮的斜面感
+    ctx.fillStyle = ready ? 'rgba(255,236,200,0.16)' : 'rgba(255,236,200,0.05)';
+    ctx.fillRect(b.x + 2, b.y + 2, b.w - 4, 2);
+
     if (lowPulse) {
-      ctx.strokeStyle = 'rgba(255,170,120,' + lowPulse.toFixed(2) + ')';
-      ctx.lineWidth = 2;
-    } else {
-      ctx.strokeStyle = ready ? P.panelLine : 'rgba(255,236,200,0.08)';
-      ctx.lineWidth = 1;
+      ctx.fillStyle = 'rgba(255,168,116,' + lowPulse.toFixed(2) + ')';
+      ctx.fillRect(b.x, b.y, b.w, 2);
+      ctx.fillRect(b.x, b.y + b.h - 2, b.w, 2);
+      ctx.fillRect(b.x, b.y, 2, b.h);
+      ctx.fillRect(b.x + b.w - 2, b.y, 2, b.h);
     }
-    ctx.stroke();
   }
 
   function drawButtons(ctx, state, L, now) {
@@ -303,12 +311,10 @@ HZ.HUD = (function () {
   function drawExpTag(ctx, state, L, now) {
     if (!state.expedition) return;
     const t = L.expTag;
-    ctx.fillStyle = 'rgba(42,28,18,0.78)';
-    roundRect(ctx, t.x, t.y, t.w, t.h, 10);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(242,193,78,0.45)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    pixelBox(ctx, t.x, t.y, t.w, t.h, {
+      fill: 'rgba(48,30,17,0.92)',
+      border: 'rgba(242,193,78,0.65)'
+    });
     font(ctx, 9, true);
     ctx.fillStyle = P.yellow;
     ctx.textAlign = 'center';
@@ -319,9 +325,10 @@ HZ.HUD = (function () {
   function drawSpeed(ctx, L, speedMul) {
     if (!HZ.DEV) return;
     const b = L.speed;
-    ctx.fillStyle = speedMul > 1 ? 'rgba(217,83,79,0.78)' : 'rgba(42,28,18,0.60)';
-    roundRect(ctx, b.x, b.y, b.w, b.h, 8);
-    ctx.fill();
+    pixelBox(ctx, b.x, b.y, b.w, b.h, {
+      fill: speedMul > 1 ? 'rgba(150,52,44,0.92)' : 'rgba(48,30,17,0.80)',
+      border: speedMul > 1 ? 'rgba(255,170,150,0.85)' : 'rgba(232,196,138,0.45)'
+    });
     font(ctx, 9, true);
     ctx.fillStyle = P.text;
     ctx.textAlign = 'center';
@@ -332,9 +339,10 @@ HZ.HUD = (function () {
   function drawDev(ctx, L) {
     if (!HZ.DEV) return;
     L.dev.forEach(function (d) {
-      ctx.fillStyle = 'rgba(42,28,18,0.55)';
-      roundRect(ctx, d.x, d.y, d.w, d.h, 4);
-      ctx.fill();
+      pixelBox(ctx, d.x, d.y, d.w, d.h, {
+        fill: 'rgba(40,26,15,0.70)',
+        border: 'rgba(200,170,130,0.40)'
+      });
       font(ctx, 8, false);
       ctx.fillStyle = 'rgba(247,233,207,0.62)';
       ctx.textAlign = 'center';
@@ -349,12 +357,10 @@ HZ.HUD = (function () {
     ctx.fillRect(0, 0, L.vw, L.vh);
 
     const m = modalRect(L.vw, L.vh);
-    ctx.fillStyle = 'rgba(52,34,21,0.97)';
-    roundRect(ctx, m.x, m.y, m.w, m.h, 10);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,214,150,0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    pixelBox(ctx, m.x, m.y, m.w, m.h, {
+      fill: 'rgba(54,35,21,0.98)',
+      border: 'rgba(240,206,152,0.80)'
+    });
 
     if (panel === 'expedition') drawExpeditionPanel(ctx, state, L, m, now);
     else if (panel === 'result') drawResultPanel(ctx, state, L, m, now);
@@ -375,9 +381,10 @@ HZ.HUD = (function () {
 
     // 关闭按钮
     const c = closeRect(L.vw, L.vh);
-    ctx.fillStyle = 'rgba(255,236,200,0.10)';
-    roundRect(ctx, c.x, c.y, c.w, c.h, 4);
-    ctx.fill();
+    pixelBox(ctx, c.x, c.y, c.w, c.h, {
+      fill: 'rgba(255,236,200,0.10)',
+      border: 'rgba(255,236,200,0.30)'
+    });
     font(ctx, 11, true);
     ctx.fillStyle = P.text;
     ctx.textAlign = 'center';
@@ -392,12 +399,10 @@ HZ.HUD = (function () {
       const scoreBlocked = isLong && score < C.expeditionRules.minScoreForLong;
       const disabled = locked || scoreBlocked || !!state.expedition;
 
-      ctx.fillStyle = disabled ? 'rgba(0,0,0,0.28)' : 'rgba(255,236,200,0.08)';
-      roundRect(ctx, r.x, r.y, r.w, r.h, 6);
-      ctx.fill();
-      ctx.strokeStyle = disabled ? 'rgba(255,236,200,0.06)' : 'rgba(255,236,200,0.16)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      pixelBox(ctx, r.x, r.y, r.w, r.h, {
+        fill: disabled ? 'rgba(0,0,0,0.28)' : 'rgba(255,236,200,0.08)',
+        border: disabled ? 'rgba(255,236,200,0.06)' : 'rgba(255,236,200,0.20)'
+      });
 
       font(ctx, 10, true);
       ctx.fillStyle = disabled ? 'rgba(247,233,207,0.40)' : P.text;
@@ -457,12 +462,10 @@ HZ.HUD = (function () {
     const btns = resultButtons(L.vw, L.vh);
     btns.forEach(function (b) {
       const disabled = b.kind === 'adDouble' && (r.doubled || r.empty || !HZ.State.canWatchAd(state, now));
-      ctx.fillStyle = disabled ? 'rgba(0,0,0,0.30)' : (b.kind === 'adDouble' ? 'rgba(217,83,79,0.80)' : 'rgba(255,236,200,0.14)');
-      roundRect(ctx, b.x, b.y, b.w, b.h, 7);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,236,200,0.22)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      pixelBox(ctx, b.x, b.y, b.w, b.h, {
+        fill: disabled ? 'rgba(0,0,0,0.30)' : (b.kind === 'adDouble' ? 'rgba(178,62,52,0.92)' : 'rgba(255,236,200,0.14)'),
+        border: 'rgba(255,236,200,0.28)'
+      });
       font(ctx, 10, true);
       ctx.fillStyle = disabled ? 'rgba(247,233,207,0.35)' : P.text;
       ctx.textAlign = 'center';
@@ -484,12 +487,10 @@ HZ.HUD = (function () {
 
     const btns = resetButtons(L.vw, L.vh);
     btns.forEach(function (b) {
-      ctx.fillStyle = b.kind === 'doReset' ? 'rgba(217,83,79,0.80)' : 'rgba(255,236,200,0.14)';
-      roundRect(ctx, b.x, b.y, b.w, b.h, 7);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,236,200,0.22)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      pixelBox(ctx, b.x, b.y, b.w, b.h, {
+        fill: b.kind === 'doReset' ? 'rgba(178,62,52,0.92)' : 'rgba(255,236,200,0.14)',
+        border: 'rgba(255,236,200,0.28)'
+      });
       font(ctx, 10, true);
       ctx.fillStyle = P.text;
       ctx.textAlign = 'center';

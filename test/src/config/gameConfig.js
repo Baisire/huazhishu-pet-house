@@ -7,7 +7,7 @@ window.HZ = window.HZ || {};
 HZ.DEV = true;
 
 HZ.CONFIG = {
-  version: 'test-v001',
+  version: 'test-v002',
 
   // 虚拟分辨率：高度固定 360，宽度按屏幕比例算，保证铺满不变形
   virtual: { height: 360, minWidth: 460, maxWidth: 900 },
