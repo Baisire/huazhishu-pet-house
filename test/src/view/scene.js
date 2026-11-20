@@ -1,11 +1,5 @@
 // 场景层：AI 像素素材拼成的暖色鼠屋（2.5D 分层）
-// 绘制顺序：合成背景 → 可交互物件 → 鼠鼠 → 前景栅栏 → 光照 → HUD
-//
-// 背景合成说明：
-// 原始背景图已自带一道栅栏，若再叠前景栅栏层会出现"两道错位栅栏"，
-// 栅栏占比被推到 30% 以上，物件也没法正确落位。
-// 因此初始化时先把背景自带的栅栏带用上方木屑纹理覆盖，只保留前景栅栏层，
-// 这样栅栏高度可控，鼠鼠和物件也能被栅栏自然遮挡。
+// 绘制顺序：背景 → 按落地点排序的物件/鼠鼠 → 前景栅栏 → 光照 → HUD
 window.HZ = window.HZ || {};
 
 HZ.Scene = (function () {
@@ -14,55 +8,33 @@ HZ.Scene = (function () {
 
   // 场景分区（640×360 虚拟坐标，由素材实测得出）
   const BANDS = {
-    wallBottom: 92,     // 木墙与木屑地面交界
-    bgFenceTop: 207,    // 背景图自带栅栏的起始行（需被覆盖）
-    fenceTop: 270,      // 前景栅栏立柱顶端
+    wallBottom: 100,    // 木墙与木屑地面交界
+    fenceTop: 260,      // 前景栅栏立柱顶端
     grassTop: 334,      // 草地起始行
-    groundLine: 282     // 鼠鼠与物件的默认落地线
+    groundLine: 278     // 鼠鼠初始落地线
   };
 
-  // 物件摆放表：cx 为水平中心，baseY 为落地线，h 为显示高度，standX 为鼠鼠互动站位
-  // baseY 略低于栅栏顶线（270），让底部被栅栏压住一点，形成"站在围栏里"的纵深
+  // 物件摆放表：baseY 决定前后深度，standX/standY 是鼠鼠互动站位
   const PLACEMENTS = [
-    { id: 'wheel',   asset: 'wheel',   h: 150, cx: 92,  baseY: 284, standX: 168, label: '跑轮' },
-    { id: 'bowl',    asset: 'bowl',    h: 40,  cx: 205, baseY: 280, standX: 168, label: '食盆' },
-    { id: 'bottle',  asset: 'bottle',  h: 104, cx: 300, baseY: 278, standX: 262, label: '水瓶' },
-    { id: 'hideout', asset: 'hideout', h: 148, cx: 500, baseY: 286, standX: 440, label: '纸箱窝' },
-    { id: 'balls',   asset: 'balls',   h: 54,  cx: 582, baseY: 280, standX: 550, label: '玩具球' }
+    { id: 'wheel',   asset: 'wheel',   h: 150, cx: 92,  baseY: 250, standX: 168, standY: 264, label: '跑轮' },
+    { id: 'bowl',    asset: 'bowl',    h: 40,  cx: 205, baseY: 272, standX: 168, standY: 282, label: '食盆' },
+    { id: 'bottle',  asset: 'bottle',  h: 104, cx: 300, baseY: 252, standX: 262, standY: 266, label: '水瓶' },
+    { id: 'hideout', asset: 'hideout', h: 148, cx: 500, baseY: 294, standX: 440, standY: 306, label: '纸箱窝' },
+    { id: 'balls',   asset: 'balls',   h: 54,  cx: 582, baseY: 282, standX: 550, standY: 294, label: '玩具球' }
   ];
 
   let objects = [];
   let backdrop = null;
   let lightLayer = null;
 
-  // 合成背景：覆盖原图自带栅栏，用上方木屑纹理向下延伸
+  // 背景素材已是无栅栏的完整地面，不再做运行时拼贴
   function buildBackdrop() {
     const cv = document.createElement('canvas');
     cv.width = VW;
     cv.height = VH;
     const g = cv.getContext('2d');
-    const bg = HZ.Assets.get('bg');
-
     g.imageSmoothingEnabled = false;
-    g.drawImage(bg, 0, 0, VW, VH);
-
-    // 用两段接近 1:1 的木屑纹理填满原栅栏所在区域：
-    // 拉伸比越小，颗粒越不失真，接缝也越不明显
-    const scale = bg.height / VH;
-    function fillBand(destTop, destBottom, srcTop, srcBottom) {
-      g.drawImage(
-        bg,
-        0, Math.round(srcTop * scale),
-        bg.width, Math.round((srcBottom - srcTop) * scale),
-        0, destTop,
-        VW, destBottom - destTop
-      );
-    }
-
-    const mid = Math.round((BANDS.bgFenceTop + BANDS.grassTop) / 2);
-    fillBand(BANDS.bgFenceTop, mid, BANDS.bgFenceTop - 58, BANDS.bgFenceTop - 4);
-    fillBand(mid, BANDS.grassTop, BANDS.wallBottom + 6, BANDS.bgFenceTop - 54);
-
+    g.drawImage(HZ.Assets.get('bg'), 0, 0, VW, VH);
     return cv;
   }
 
@@ -107,7 +79,8 @@ HZ.Scene = (function () {
         w: w,
         h: p.h,
         baseY: p.baseY,
-        standX: p.standX
+        standX: p.standX,
+        standY: p.standY
       };
     });
   }
@@ -137,20 +110,34 @@ HZ.Scene = (function () {
     return o.asset;
   }
 
-  function drawObjects(ctx, state, now) {
-    objects.forEach(function (o) {
-      // 接触阴影：把物件压在木屑上
-      ctx.save();
-      ctx.globalAlpha = 0.22;
-      ctx.fillStyle = '#4a2d15';
-      ctx.beginPath();
-      ctx.ellipse(o.x + o.w / 2, o.baseY - 2, o.w * 0.40, Math.max(3, o.h * 0.045), 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+  function drawObject(ctx, state, now, o) {
+    // 接触阴影：把物件压在木屑上
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = '#4a2d15';
+    ctx.beginPath();
+    ctx.ellipse(o.x + o.w / 2, o.baseY - 2, o.w * 0.40, Math.max(3, o.h * 0.045), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
-      const img = HZ.Assets.get(currentAsset(o, state, now)) || HZ.Assets.get(o.asset);
-      ctx.drawImage(img, o.x, o.y, o.w, o.h);
+    const img = HZ.Assets.get(currentAsset(o, state, now)) || HZ.Assets.get(o.asset);
+    ctx.drawImage(img, o.x, o.y, o.w, o.h);
+  }
+
+  // 鼠鼠和物件按落地点排序，走到物体后面时会被正确遮挡
+  function drawWorld(ctx, state, now, mouse) {
+    const drawables = objects.map(function (o) {
+      return {
+        footY: o.baseY,
+        draw: function () { drawObject(ctx, state, now, o); }
+      };
     });
+    drawables.push({
+      footY: mouse.y,
+      draw: function () { HZ.Mouse.draw(ctx, mouse, now); }
+    });
+    drawables.sort(function (a, b) { return a.footY - b.footY; });
+    drawables.forEach(function (item) { item.draw(); });
   }
 
   function byId(id) {
@@ -159,8 +146,9 @@ HZ.Scene = (function () {
 
   // 命中检测：从后往前，优先命中上层物件
   function hitObject(x, y) {
-    for (let i = objects.length - 1; i >= 0; i--) {
-      const o = objects[i];
+    const sorted = objects.slice().sort(function (a, b) { return b.baseY - a.baseY; });
+    for (let i = 0; i < sorted.length; i++) {
+      const o = sorted[i];
       if (x >= o.x && x <= o.x + o.w && y >= o.y && y <= o.y + o.h) return o;
     }
     return null;
@@ -174,7 +162,7 @@ HZ.Scene = (function () {
     drawBg: drawBg,
     drawFence: drawFence,
     drawLight: drawLight,
-    drawObjects: drawObjects,
+    drawWorld: drawWorld,
     hitObject: hitObject,
     byId: byId,
     objects: function () { return objects; }

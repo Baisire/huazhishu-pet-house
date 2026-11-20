@@ -4,8 +4,8 @@ window.HZ = window.HZ || {};
 
 HZ.Assets = (function () {
   const MANIFEST = {
-    bg: 'bg-room.png',
-    fence: 'fg-fence.png',
+    bg: 'bg-room-v2.png',
+    fence: 'fg-fence-v2.png',
     wheel: 'wheel.png',
     wheelF2: 'wheel-f2.png',
     bottle: 'bottle.png',

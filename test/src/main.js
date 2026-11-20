@@ -76,9 +76,9 @@ window.HZ = window.HZ || {};
 
   function feedback(actionId) {
     const cx = mouse.x;
-    const cy = mouse.baseY - 70;
+    const cy = mouse.y - 70;
     if (actionId === 'bath') HZ.Effects.spawnBubbles(cx, cy, 10);
-    else if (actionId === 'tidy') HZ.Effects.spawnDust(cx + 30, mouse.baseY - 10, 8);
+    else if (actionId === 'tidy') HZ.Effects.spawnDust(cx + 30, mouse.y - 10, 8);
     else if (actionId === 'pet') HZ.Effects.spawnHearts(cx, cy, 6);
     else HZ.Effects.spawnStars(cx, cy, '#ffd54f', 7);
   }
@@ -99,11 +99,11 @@ window.HZ = window.HZ || {};
     const act = MOUSE_ACT[id] || MOUSE_ACT.pet;
     HZ.Mouse.act(mouse, act.state, act.ms);
     feedback(id);
-    HZ.Effects.floatText(mouse.x, mouse.baseY - 80, res.def.name + ' +' + res.def.value, '#f7e9cf');
+    HZ.Effects.floatText(mouse.x, mouse.y - 80, res.def.name + ' +' + res.def.value, '#f7e9cf');
 
     if (res.leveled > 0) {
       HZ.Effects.toast('升级！Lv.' + state.level + ' ' + HZ.State.title(state));
-      HZ.Effects.spawnStars(mouse.x, mouse.baseY - 90, '#ffd54f', 12);
+      HZ.Effects.spawnStars(mouse.x, mouse.y - 90, '#ffd54f', 12);
     }
     save();
     return true;
@@ -127,7 +127,7 @@ window.HZ = window.HZ || {};
 
     const careId = OBJECT_CARE[o.id];
     if (o.id === 'hideout') {
-      HZ.Mouse.walkTo(mouse, o.standX, function () {
+      HZ.Mouse.walkTo(mouse, o.standX, o.standY, function () {
         HZ.Effects.toast('鼠鼠钻进纸箱窝里了');
         HZ.Mouse.act(mouse, 'pet', 900);
         state.stats.happy = Math.min(100, state.stats.happy + 5);
@@ -136,7 +136,7 @@ window.HZ = window.HZ || {};
       return;
     }
 
-    HZ.Mouse.walkTo(mouse, o.standX, function () {
+    HZ.Mouse.walkTo(mouse, o.standX, o.standY, function () {
       doCare(careId);
     });
   }
@@ -159,14 +159,15 @@ window.HZ = window.HZ || {};
     if (!result) return;
     mouse.away = false;
     mouse.x = 560;
+    mouse.y = 244;
     mouse.facing = -1;
-    HZ.Mouse.walkTo(mouse, 330);
+    HZ.Mouse.walkTo(mouse, 330, 268);
 
     if (result.empty) {
       HZ.Effects.toast('鼠鼠空手而归，还弄脏了');
-      HZ.Effects.spawnDust(mouse.x, mouse.baseY - 10, 10);
+      HZ.Effects.spawnDust(mouse.x, mouse.y - 10, 10);
     } else {
-      HZ.Effects.spawnStars(mouse.x, mouse.baseY - 60, '#ffd54f', 12);
+      HZ.Effects.spawnStars(mouse.x, mouse.y - 60, '#ffd54f', 12);
     }
     HZ.HUD.setPanel('result');
     save();
@@ -251,15 +252,14 @@ window.HZ = window.HZ || {};
     }
 
     // 2) 再判鼠鼠本体：抚摸
-    if (!mouse.away) {
-      const img = HZ.Assets.get('mouse');
-      const ih = img.naturalHeight || img.height || 1;
-      const iw = img.naturalWidth || img.width || 1;
-      const w = Math.round(98 * iw / ih);
-      if (p.x > mouse.x - w / 2 && p.x < mouse.x + w / 2 &&
-          p.y > mouse.baseY - 100 && p.y < mouse.baseY + 6) {
-        doCare('pet');
-      }
+    if (!mouse.away && HZ.Mouse.hitTest(mouse, p.x, p.y)) {
+      doCare('pet');
+      return;
+    }
+
+    // 3) 点空地：走到目标位置
+    if (!mouse.away && mouse.state !== 'walk' && HZ.Mouse.canWalk(p.x, p.y)) {
+      HZ.Mouse.walkTo(mouse, p.x, p.y);
     }
   }
 
@@ -282,8 +282,7 @@ window.HZ = window.HZ || {};
 
     bctx.clearRect(0, 0, VW, VH);
     HZ.Scene.drawBg(bctx);
-    HZ.Scene.drawObjects(bctx, state, now);
-    HZ.Mouse.draw(bctx, mouse, now);
+    HZ.Scene.drawWorld(bctx, state, now, mouse);
     HZ.Effects.draw(bctx);
     HZ.Scene.drawFence(bctx);
     HZ.Scene.drawLight(bctx);
