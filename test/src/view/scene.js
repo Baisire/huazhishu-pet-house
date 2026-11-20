@@ -125,19 +125,45 @@ HZ.Scene = (function () {
   }
 
   // 鼠鼠和物件按落地点排序，走到物体后面时会被正确遮挡
-  function drawWorld(ctx, state, now, mouse) {
+  // 家具：地面件与固定物件同层参与 y 排序；贴墙件（挂画/秋千）画在鼠鼠之后
+  // skipUid：正在被拖动的已摆件跳过绘制，避免本体和幽灵件双份显示
+  function drawWorld(ctx, state, now, mouse, skipUid) {
     const drawables = objects.map(function (o) {
       return {
         footY: o.baseY,
         draw: function () { drawObject(ctx, state, now, o); }
       };
     });
+
+    const room = state.room;
+    const placed = (room && Array.isArray(room.placed)) ? room.placed : [];
+    const wallItems = [];
+    placed.forEach(function (p) {
+      if (!p || typeof p !== 'object') return;
+      if (skipUid && p.uid === skipUid) return;
+      const def = HZ.Furniture.def(p.itemId);
+      if (!def) return;
+      if (def.wall) {
+        wallItems.push(p);
+      } else {
+        drawables.push({
+          footY: p.y,
+          draw: function () { HZ.Furniture.draw(ctx, p.itemId, p.x, p.y); }
+        });
+      }
+    });
+
     drawables.push({
       footY: mouse.y,
       draw: function () { HZ.Mouse.draw(ctx, mouse, now); }
     });
     drawables.sort(function (a, b) { return a.footY - b.footY; });
     drawables.forEach(function (item) { item.draw(); });
+
+    // 贴墙层：在鼠鼠与地面物件之后
+    wallItems.forEach(function (p) {
+      HZ.Furniture.draw(ctx, p.itemId, p.x, p.y);
+    });
   }
 
   function byId(id) {

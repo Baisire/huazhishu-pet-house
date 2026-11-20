@@ -6,9 +6,15 @@ HZ.HUD = (function () {
   const C = HZ.CONFIG;
   const P = C.palette;
 
-  let panel = null; // null | 'expedition' | 'result' | 'reset'
+  let panel = null; // null | 'expedition' | 'result' | 'reset' | 'shop'
+  let panelAt = 0;  // 面板打开时间，用于商店底部上滑动画
 
-  function setPanel(name) { panel = name; }
+  function setPanel(name) {
+    if (panel !== name) {
+      panel = name;
+      panelAt = Date.now();
+    }
+  }
   function getPanel() { return panel; }
 
   function font(ctx, size, bold) {
@@ -39,15 +45,20 @@ HZ.HUD = (function () {
   }
 
   function layout(vw, vh) {
-    const btnW = 62, btnH = 28, gap = 6;
+    // 5 个照料 + 商店 + 探险 = 7 个按钮，按钮宽度相应收窄
+    const btnW = 54, btnH = 28, gap = 5;
     const visible = C.actions.filter(function (a) { return !a.hidden; });
-    const count = visible.length + 1;
+    const count = visible.length + 2;
     const total = btnW * count + gap * (count - 1);
     const startX = Math.round((vw - total) / 2);
     const btnY = vh - btnH - 6;
 
     const buttons = visible.map(function (a, i) {
       return { kind: 'care', id: a.id, label: a.name, x: startX + i * (btnW + gap), y: btnY, w: btnW, h: btnH };
+    });
+    buttons.push({
+      kind: 'panel', id: 'shop', name: 'shop', label: '商店',
+      x: startX + (count - 2) * (btnW + gap), y: btnY, w: btnW, h: btnH
     });
     buttons.push({
       kind: 'panel', id: 'expedition', name: 'expedition', label: '探险',
@@ -73,10 +84,42 @@ HZ.HUD = (function () {
 
   function modalRect(vw, vh) {
     let w, h;
+    if (panel === 'shop') {
+      // 商店：贴底横条，从底部上滑
+      w = vw - 16;
+      h = 196;
+      return { x: 8, y: vh - h, w: w, h: h };
+    }
     if (panel === 'expedition') { w = Math.min(360, vw - 40); h = 206; }
     else if (panel === 'result') { w = 300; h = 168; }
     else { w = 262; h = 122; }
     return { x: Math.round((vw - w) / 2), y: Math.round((vh - h) / 2), w: w, h: h };
+  }
+
+  // 商店底部上滑偏移：绘制与命中都用它，避免动画期间点到下一行
+  function shopSlideOffset(m) {
+    const t = Math.min(1, (Date.now() - panelAt) / 220);
+    const ease = 1 - Math.pow(1 - t, 3);
+    return Math.round((1 - ease) * m.h);
+  }
+
+  // 商店条目网格（4 列 × 2 行，正好容纳首批 8 件）；yOff 用于入场动画
+  function shopItems(vw, vh, yOff) {
+    const m = modalRect(vw, vh);
+    const list = C.economy.furniture;
+    const padX = 12, top = m.y + 30, gap = 8, cols = 4;
+    const cardW = Math.floor((m.w - padX * 2 - gap * (cols - 1)) / cols);
+    const cardH = 64;
+    const off = yOff || 0;
+    return list.map(function (def, i) {
+      return {
+        id: def.id,
+        x: m.x + padX + (i % cols) * (cardW + gap),
+        y: top + Math.floor(i / cols) * (cardH + 6) + off,
+        w: cardW,
+        h: cardH
+      };
+    });
   }
 
   function expeditionRows(vw, vh) {
@@ -124,6 +167,20 @@ HZ.HUD = (function () {
 
   // ---------------- 交互命中 ----------------
   function hit(x, y, state, now, vw, vh) {
+    if (panel === 'shop') {
+      const m = modalRect(vw, vh);
+      const yOff = shopSlideOffset(m);
+      const close = { x: m.x + m.w - 24, y: m.y + yOff + 6, w: 18, h: 18 };
+      if (inRect(x, y, close)) return { kind: 'closePanel' };
+      const items = shopItems(vw, vh, yOff);
+      for (let i = 0; i < items.length; i++) {
+        if (inRect(x, y, items[i])) return { kind: 'shopItem', id: items[i].id };
+      }
+      const sheet = { x: m.x, y: m.y + yOff, w: m.w, h: m.h };
+      if (!inRect(x, y, sheet)) return { kind: 'closePanel' };
+      return null;
+    }
+
     if (panel === 'expedition') {
       if (inRect(x, y, closeRect(vw, vh))) return { kind: 'closePanel' };
       const rows = expeditionRows(vw, vh);
@@ -156,7 +213,7 @@ HZ.HUD = (function () {
     for (let i = 0; i < L.buttons.length; i++) {
       const b = L.buttons[i];
       if (inRect(x, y, b)) {
-        return b.kind === 'care' ? { kind: 'care', id: b.id } : { kind: 'panel', name: 'expedition' };
+        return b.kind === 'care' ? { kind: 'care', id: b.id } : { kind: 'panel', name: b.name };
       }
     }
 
@@ -261,6 +318,16 @@ HZ.HUD = (function () {
   function drawButtons(ctx, state, L, now) {
     L.buttons.forEach(function (b) {
       if (b.kind === 'panel') {
+        if (b.name === 'shop') {
+          // 商店随时可用（探险倒计时中也能布置房间）
+          buttonBase(ctx, b, true, 0);
+          font(ctx, 11, true);
+          ctx.fillStyle = P.text;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('商店', b.x + b.w / 2, b.y + b.h / 2);
+          return;
+        }
         const exp = state.expedition;
         let label = '探险';
         let ready = !exp;
@@ -353,6 +420,8 @@ HZ.HUD = (function () {
 
   function drawModal(ctx, state, L, now) {
     if (!panel) return;
+    if (panel === 'shop') { drawShopPanel(ctx, state, L); return; }
+
     ctx.fillStyle = 'rgba(16,10,6,0.58)';
     ctx.fillRect(0, 0, L.vw, L.vh);
 
@@ -365,6 +434,113 @@ HZ.HUD = (function () {
     if (panel === 'expedition') drawExpeditionPanel(ctx, state, L, m, now);
     else if (panel === 'result') drawResultPanel(ctx, state, L, m, now);
     else if (panel === 'reset') drawResetPanel(ctx, L, m);
+  }
+
+  // ---- 商店面板（底部上滑） ----
+  function drawSeedIcon(ctx, x, y, dim) {
+    ctx.save();
+    ctx.fillStyle = dim ? 'rgba(242,193,78,0.40)' : P.yellow;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 4.2, 3, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawShopPanel(ctx, state, L) {
+    ctx.fillStyle = 'rgba(16,10,6,0.42)';
+    ctx.fillRect(0, 0, L.vw, L.vh);
+
+    const m = modalRect(L.vw, L.vh);
+    const yOff = shopSlideOffset(m);
+
+    pixelBox(ctx, m.x, m.y + yOff, m.w, m.h, {
+      fill: 'rgba(54,35,21,0.98)',
+      border: 'rgba(240,206,152,0.80)'
+    });
+
+    // 标题与余额
+    font(ctx, 13, true);
+    ctx.fillStyle = P.text;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('商店', m.x + 14, m.y + yOff + 16);
+
+    drawSeedIcon(ctx, m.x + m.w - 78, m.y + yOff + 16, false);
+    font(ctx, 10, true);
+    ctx.fillStyle = P.yellow;
+    ctx.textAlign = 'right';
+    ctx.fillText(String(Math.round(state.seeds)), m.x + m.w - 34, m.y + yOff + 16);
+
+    // 关闭
+    const c = { x: m.x + m.w - 24, y: m.y + yOff + 6, w: 18, h: 18 };
+    pixelBox(ctx, c.x, c.y, c.w, c.h, {
+      fill: 'rgba(255,236,200,0.10)',
+      border: 'rgba(255,236,200,0.30)'
+    });
+    font(ctx, 11, true);
+    ctx.fillStyle = P.text;
+    ctx.textAlign = 'center';
+    ctx.fillText('×', c.x + c.w / 2, c.y + c.h / 2 + 1);
+
+    // 条目
+    const room = state.room || { inventory: [], placedEver: [] };
+    const items = shopItems(L.vw, L.vh, yOff);
+    items.forEach(function (cell, i) {
+      drawShopCard(ctx, state, room, C.economy.furniture[i], cell);
+    });
+
+    // 底部提示
+    font(ctx, 8, false);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'center';
+    ctx.fillText('轻点购买 · 按住拖到房间摆放 · 拖到「收回」区可放回库存',
+      m.x + m.w / 2, m.y + yOff + m.h - 11);
+  }
+
+  function drawShopCard(ctx, state, room, def, cell) {
+    const inv = room.inventory.filter(function (id) { return id === def.id; }).length;
+    const ever = room.placedEver.indexOf(def.id) >= 0;
+    const afford = state.seeds >= def.price;
+    const x = cell.x, y = cell.y;
+
+    pixelBox(ctx, x, y, cell.w, cell.h, {
+      fill: afford ? 'rgba(255,236,200,0.08)' : 'rgba(0,0,0,0.30)',
+      border: afford ? 'rgba(255,236,200,0.22)' : 'rgba(255,236,200,0.08)'
+    });
+
+    // 占位缩略图
+    pixelBox(ctx, x + 6, y + 12, 40, 40, {
+      fill: 'rgba(0,0,0,0.28)',
+      border: 'rgba(255,236,200,0.14)'
+    });
+    HZ.Furniture.drawPreview(ctx, def.id, x + 26, y + 32, 34, 32);
+
+    font(ctx, 10, true);
+    ctx.fillStyle = afford ? P.text : 'rgba(247,233,207,0.42)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(def.name, x + 52, y + 18);
+
+    // 价格
+    drawSeedIcon(ctx, x + 56, y + 33, !afford);
+    font(ctx, 9, true);
+    ctx.fillStyle = afford ? P.yellow : 'rgba(255,159,147,0.62)';
+    ctx.textAlign = 'left';
+    ctx.fillText(String(def.price), x + 63, y + 33);
+
+    // 已购 / 已摆过标记
+    font(ctx, 8, false);
+    ctx.textAlign = 'left';
+    if (inv > 0) {
+      ctx.fillStyle = '#9ad6a0';
+      ctx.fillText('已购 ×' + inv, x + 52, y + 50);
+    } else if (ever) {
+      ctx.fillStyle = 'rgba(247,233,207,0.42)';
+      ctx.fillText('已摆过', x + 52, y + 50);
+    } else if (!afford) {
+      ctx.fillStyle = 'rgba(255,179,167,0.72)';
+      ctx.fillText('瓜子不够', x + 52, y + 50);
+    }
   }
 
   function drawExpeditionPanel(ctx, state, L, m, now) {
@@ -514,6 +690,7 @@ HZ.HUD = (function () {
     hit: hit,
     draw: draw,
     setPanel: setPanel,
-    getPanel: getPanel
+    getPanel: getPanel,
+    shopItems: shopItems
   };
 })();

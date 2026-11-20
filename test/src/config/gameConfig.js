@@ -7,7 +7,7 @@ window.HZ = window.HZ || {};
 HZ.DEV = true;
 
 HZ.CONFIG = {
-  version: 'test-v002',
+  version: 'test-v003',
 
   // 虚拟分辨率：高度固定 360，宽度按屏幕比例算，保证铺满不变形
   virtual: { height: 360, minWidth: 460, maxWidth: 900 },
@@ -87,7 +87,56 @@ HZ.CONFIG = {
     emptyPenaltyClean: 30   // 状态分 <20 派长探险：空手而归，清洁 -30
   },
 
-  economy: { seedPerAd: 50 },
+  // 经济：广告兑换 + 家具商店（test-v003）
+  // 家具清单来源：docs/design/01-核心循环/家具与商店-测试版细化设计.md 第 2 节
+  // w/h 为摆放判定与占位绘制尺寸；draw 只放配色参数，绘制逻辑在 view/furniture.js
+  economy: {
+    seedPerAd: 50,
+    roomCap: 12,        // 同屏摆放上限（不含 5 个固定物件）
+    placeHappy: 5,      // 每件家具首次摆放开心加成
+    furniture: [
+      {
+        id: 'f_201', name: '小坐垫', price: 200, tier: 'small', wall: false,
+        w: 54, h: 22,
+        draw: { fill: '#c96b4a', light: '#e0876a', dark: '#5a3a24' }
+      },
+      {
+        id: 'f_202', name: '小盆栽', price: 250, tier: 'small', wall: false,
+        w: 34, h: 56,
+        draw: { leaf: '#7f9a54', leafLight: '#9cbb6a', pot: '#b06a44', dark: '#5a3a24' }
+      },
+      {
+        id: 'f_203', name: '挂画', price: 300, tier: 'small', wall: true,
+        w: 56, h: 42,
+        draw: { frame: '#8d6231', frameLight: '#bd8a4c', paper: '#f3e3c0', motif: '#7fbfe0', dark: '#5a3a24' }
+      },
+      {
+        id: 'f_204', name: '条纹毛毯', price: 300, tier: 'small', wall: false,
+        w: 72, h: 24,
+        draw: { a: '#c96b4a', b: '#f0c273', dark: '#5a3a24' }
+      },
+      {
+        id: 'f_205', name: '小木梯', price: 350, tier: 'small', wall: false,
+        w: 44, h: 64,
+        draw: { fill: '#bd8a4c', dark: '#5a3a24' }
+      },
+      {
+        id: 'f_206', name: '吊秋千', price: 400, tier: 'small', wall: true,
+        w: 60, h: 56,
+        draw: { beam: '#8d6231', rope: '#c9a36b', board: '#bd8a4c', dark: '#5a3a24' }
+      },
+      {
+        id: 'f_207', name: '草编球窝', price: 450, tier: 'small', wall: false,
+        w: 58, h: 34,
+        draw: { straw: '#d8a04b', strawDark: '#a9762c', ball: '#8cc45f', dark: '#5a3a24' }
+      },
+      {
+        id: 'f_208', name: '小书架', price: 500, tier: 'small', wall: false,
+        w: 50, h: 66,
+        draw: { fill: '#8d6231', grid: '#5a3a24', bookA: '#c96b4a', bookB: '#7fbfe0', bookC: '#f0c273', dark: '#5a3a24' }
+      }
+    ]
+  },
 
   ads: { dailyCap: 8 },
 

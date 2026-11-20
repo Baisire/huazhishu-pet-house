@@ -34,8 +34,102 @@ HZ.State = (function () {
       daily: { key: dayKey(now), counts: {} },
       expedition: null,
       lastResult: null,
-      ad: { key: dayKey(now), count: 0 }
+      ad: { key: dayKey(now), count: 0 },
+      room: HZ.Save.emptyRoom()
     };
+  }
+
+  // 房间数据归一：脏档/手改档的非法元素在这一层剔除，保证后续绘制安全
+  function ensureRoom(state) {
+    state.room = HZ.Save.normalizeRoom(state.room);
+    return state.room;
+  }
+
+  function furnitureDef(itemId) {
+    return C.economy.furniture.find(function (f) { return f.id === itemId; }) || null;
+  }
+
+  function roomCap() {
+    return C.economy.roomCap || 12;
+  }
+
+  function inventoryCount(state, itemId) {
+    const room = ensureRoom(state);
+    return room.inventory.filter(function (id) { return id === itemId; }).length;
+  }
+
+  function placedCount(state) {
+    return ensureRoom(state).placed.length;
+  }
+
+  // 购买：扣瓜子入库存；瓜子不足返回失败，不做任何修改
+  function buy(state, itemId) {
+    const def = furnitureDef(itemId);
+    if (!def) return { ok: false, reason: '未知家具' };
+    if (state.seeds < def.price) return { ok: false, reason: '瓜子不够' };
+
+    state.seeds -= def.price;
+    ensureRoom(state).inventory.push(itemId);
+    return { ok: true, def: def, cost: def.price };
+  }
+
+  function nextUid(room) {
+    let max = 0;
+    room.placed.forEach(function (p) {
+      const m = /^p_(\d+)$/.exec(p.uid || '');
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    return 'p_' + (max + 1);
+  }
+
+  // 从库存落定一件。首次摆放该款家具（placedEver 判定）开心 +5，
+  // 收回重摆不再给。摆放上限不含 5 个固定物件。
+  function placeFromInventory(state, itemId, x, y) {
+    const def = furnitureDef(itemId);
+    if (!def) return { ok: false, reason: '未知家具' };
+    const room = ensureRoom(state);
+    const idx = room.inventory.indexOf(itemId);
+    if (idx < 0) return { ok: false, reason: '库存里没有这件家具' };
+    if (room.placed.length >= roomCap()) return { ok: false, reason: '房间放不下了' };
+
+    room.inventory.splice(idx, 1);
+    const first = room.placedEver.indexOf(itemId) < 0;
+    const item = {
+      uid: nextUid(room),
+      itemId: itemId,
+      x: Math.round(x),
+      y: Math.round(y)
+    };
+    room.placed.push(item);
+
+    let delta = 0;
+    if (first) {
+      room.placedEver.push(itemId);
+      const happyDef = C.stats.find(function (s) { return s.id === 'happy'; });
+      const before = state.stats.happy;
+      state.stats.happy = clamp(before + (C.economy.placeHappy || 5), happyDef.max);
+      delta = state.stats.happy - before;
+    }
+    return { ok: true, item: item, first: first, delta: delta };
+  }
+
+  function movePlaced(state, uid, x, y) {
+    const room = ensureRoom(state);
+    const item = room.placed.find(function (p) { return p.uid === uid; });
+    if (!item) return { ok: false, reason: '这件家具不在了' };
+    item.x = Math.round(x);
+    item.y = Math.round(y);
+    return { ok: true, item: item };
+  }
+
+  // 收回：从房间移除并回到库存，placedEver 保留
+  function retrievePlaced(state, uid) {
+    const room = ensureRoom(state);
+    const idx = room.placed.findIndex(function (p) { return p.uid === uid; });
+    if (idx < 0) return { ok: false, reason: '这件家具不在了' };
+    const item = room.placed.splice(idx, 1)[0];
+    room.inventory.push(item.itemId);
+    return { ok: true, item: item, def: furnitureDef(item.itemId) };
   }
 
   function rollDay(state, now) {
@@ -228,6 +322,8 @@ HZ.State = (function () {
     state.cooldowns = Object.assign({}, base.cooldowns, data.cooldowns);
     state.daily = data.daily || base.daily;
     state.ad = data.ad || base.ad;
+    state.room = data.room || base.room;
+    ensureRoom(state);
 
     // 离线结算：0.8 系数、最多 10 小时
     tick(state, Date.now(), true);
@@ -251,6 +347,15 @@ HZ.State = (function () {
     settleExpedition: settleExpedition,
     doubleResult: doubleResult,
     canWatchAd: canWatchAd,
-    markAdWatched: markAdWatched
+    markAdWatched: markAdWatched,
+    ensureRoom: ensureRoom,
+    furnitureDef: furnitureDef,
+    roomCap: roomCap,
+    inventoryCount: inventoryCount,
+    placedCount: placedCount,
+    buy: buy,
+    placeFromInventory: placeFromInventory,
+    movePlaced: movePlaced,
+    retrievePlaced: retrievePlaced
   };
 })();
