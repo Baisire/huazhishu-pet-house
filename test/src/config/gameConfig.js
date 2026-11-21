@@ -7,7 +7,7 @@ window.HZ = window.HZ || {};
 HZ.DEV = true;
 
 HZ.CONFIG = {
-  version: 'test-v003',
+  version: 'test-v004',
 
   // 虚拟分辨率：高度固定 360，宽度按屏幕比例算，保证铺满不变形
   virtual: { height: 360, minWidth: 460, maxWidth: 900 },
@@ -66,25 +66,52 @@ HZ.CONFIG = {
     { id: 'pet', name: '抚摸', stat: 'happy', value: 12, cooldownSec: 60, dailyLimit: 30, exp: 2, mouseAct: 'happy', hidden: true }
   ],
 
-  // 探险档位（1.3）。10 分钟档在测试版下调到 Lv1 解锁，方便立刻验证。
+  // 探险档位（1.3 / v004 双槽）。slots 表示该档位在哪个槽位可选：
+  // 10m/30m 只走短途；2h 短途长途都能派；8h 只走长途。
+  // photoRate 对应文档 15%/25%/40%/60% 四档掉落率。
   expedition: [
-    { id: 'exp_10m', name: '10 分钟', durationSec: 600, seedBase: 20, materialRate: 0.10, unlockLevel: 1 },
-    { id: 'exp_30m', name: '30 分钟', durationSec: 1800, seedBase: 45, materialRate: 0.15, unlockLevel: 2 },
-    { id: 'exp_2h', name: '2 小时', durationSec: 7200, seedBase: 90, materialRate: 0.20, unlockLevel: 3 },
-    { id: 'exp_8h', name: '8 小时', durationSec: 28800, seedBase: 200, materialRate: 0.35, unlockLevel: 4 }
+    { id: 'exp_10m', name: '10 分钟', durationSec: 600, seedBase: 20, materialRate: 0.10, photoRate: 0.15, unlockLevel: 2, slots: ['short'] },
+    { id: 'exp_30m', name: '30 分钟', durationSec: 1800, seedBase: 45, materialRate: 0.15, photoRate: 0.25, unlockLevel: 2, slots: ['short'] },
+    { id: 'exp_2h', name: '2 小时', durationSec: 7200, seedBase: 90, materialRate: 0.20, photoRate: 0.40, unlockLevel: 3, slots: ['short', 'long'] },
+    { id: 'exp_8h', name: '8 小时', durationSec: 28800, seedBase: 200, materialRate: 0.35, photoRate: 0.60, unlockLevel: 4, slots: ['long'] }
+  ],
+
+  // 双槽（1.3，用户拍板）：短槽 Lv2 开放，长槽 Lv4 解锁。数组顺序即存档 slots 下标。
+  expeditionSlots: [
+    { id: 'short', name: '短途', unlockLevel: 2 },
+    { id: 'long', name: '长途', unlockLevel: 4 }
   ],
 
   expeditionRules: {
-    longDurationSec: 7200,   // 2 小时及以上受状态分门槛约束
+    longDurationSec: 7200,   // 2 小时及以上参与空手而归判定
     minScoreForLong: 20,
-    // 状态系数（1.3）
+    // 状态系数（1.3）；20–39 落在 0.8 档
     scoreTiers: [
       { min: 70, mul: 1.1 },
       { min: 40, mul: 1.0 },
       { min: 20, mul: 0.8 },
       { min: 0,  mul: 0.6 }
     ],
-    emptyPenaltyClean: 30   // 状态分 <20 派长探险：空手而归，清洁 -30
+    emptyPenaltyClean: 30   // 快照状态分 <20 且时长 >=2h：空手而归，清洁 -30
+  },
+
+  // 照片图鉴（v004）：12 张代码绘制的占位卡；重复卡折算瓜子
+  photos: {
+    dupSeeds: 20,
+    pool: [
+      { id: 'p_01', name: '窗台日光', color: '#f5c46a', accent: '#e08a3c', variant: 'sun' },
+      { id: 'p_02', name: '轮中疾跑', color: '#8fbfd8', accent: '#4a7d9c', variant: 'stripe' },
+      { id: 'p_03', name: '纸箱打盹', color: '#d8a45f', accent: '#8d6231', variant: 'box' },
+      { id: 'p_04', name: '水瓶饮水', color: '#a8dcf0', accent: '#5f9dbb', variant: 'dots' },
+      { id: 'p_05', name: '食盆大餐', color: '#e6b56d', accent: '#b06a44', variant: 'sun' },
+      { id: 'p_06', name: '篱笆远眺', color: '#8cc45f', accent: '#4c8437', variant: 'stripe' },
+      { id: 'p_07', name: '木屑打滚', color: '#efd39b', accent: '#c9a36b', variant: 'dots' },
+      { id: 'p_08', name: '玩具球之战', color: '#f28fae', accent: '#c2587a', variant: 'box' },
+      { id: 'p_09', name: '深夜磨牙', color: '#6f7fa8', accent: '#3f4d70', variant: 'stripe' },
+      { id: 'p_10', name: '晨光伸懒腰', color: '#f7d9a0', accent: '#e0a95a', variant: 'sun' },
+      { id: 'p_11', name: '越狱未遂', color: '#c96b4a', accent: '#7a3a26', variant: 'stripe' },
+      { id: 'p_12', name: '装死大师', color: '#b9b7c2', accent: '#6d6b78', variant: 'dots' }
+    ]
   },
 
   // 经济：广告兑换 + 家具商店（test-v003）
@@ -94,6 +121,14 @@ HZ.CONFIG = {
     seedPerAd: 50,
     roomCap: 12,        // 同屏摆放上限（不含 5 个固定物件）
     placeHappy: 5,      // 每件家具首次摆放开心加成
+    // 家具合法摆放区间（view/furniture.js 与存档夹紧共用，core 不 import view）
+    furnitureBounds: {
+      x: { min: 8, max: 632 },
+      // 贴墙件：底边挂墙；topMin 为顶边离画布顶部的最小距离
+      wall: { yMin: 48, yMax: 100, topMin: 8 },
+      // 地面件：落在木屑地面，底边不超过前景栅栏
+      ground: { yMin: 198, yMax: 258, topMin: 104 }
+    },
     furniture: [
       {
         id: 'f_201', name: '小坐垫', price: 200, tier: 'small', wall: false,

@@ -29,10 +29,10 @@ HZ.State = (function () {
       exp: 0,
       seeds: 0,
       materials: 0,
-      photos: 0,
+      photos: { owned: [], dupSeeds: 0 },
       cooldowns: cooldowns,
       daily: { key: dayKey(now), counts: {} },
-      expedition: null,
+      expedition: { slots: [null, null] },
       lastResult: null,
       ad: { key: dayKey(now), count: 0 },
       room: HZ.Save.emptyRoom()
@@ -225,26 +225,98 @@ HZ.State = (function () {
     return { ok: true, def: def, leveled: leveled };
   }
 
-  function startExpedition(state, id, now) {
-    if (state.expedition) return { ok: false, reason: '鼠鼠还在外面' };
-    const def = C.expedition.find(function (e) { return e.id === id; });
-    if (!def) return { ok: false, reason: '未知档位' };
-    if (state.level < def.unlockLevel) return { ok: false, reason: 'Lv' + def.unlockLevel + ' 解锁' };
+  // ---------------- 探险（v004 双槽） ----------------
 
-    const score = statusScore(state);
-    const isLong = def.durationSec >= C.expeditionRules.longDurationSec;
-    if (isLong && score < C.expeditionRules.minScoreForLong) {
-      return { ok: false, reason: '状态分不足 20，出不了远门' };
+  function tierDef(id) {
+    return C.expedition.find(function (e) { return e.id === id; }) || null;
+  }
+
+  function slotDef(kind) {
+    return (C.expeditionSlots || []).find(function (s) { return s.id === kind; }) || null;
+  }
+
+  // 槽位下标由 config 顺序决定（short=0 / long=1）
+  function slotIndex(kind) {
+    return (C.expeditionSlots || []).findIndex(function (s) { return s.id === kind; });
+  }
+
+  // 双槽结构兜底：旧档/脏档在 save 层已归一，这里再保证数组长度与类型
+  function ensureExpedition(state) {
+    const exp = state.expedition;
+    if (!exp || typeof exp !== 'object' || !Array.isArray(exp.slots)) {
+      state.expedition = HZ.Save.normalizeExpedition(exp);
+    }
+    while (state.expedition.slots.length < (C.expeditionSlots || []).length) {
+      state.expedition.slots.push(null);
+    }
+    return state.expedition;
+  }
+
+  function ensurePhotos(state) {
+    const p = state.photos;
+    if (!p || typeof p !== 'object' || Array.isArray(p) || !Array.isArray(p.owned)) {
+      state.photos = HZ.Save.normalizePhotos(p);
+    }
+    return state.photos;
+  }
+
+  function photoDef(id) {
+    const pool = (C.photos && C.photos.pool) || [];
+    return pool.find(function (p) { return p.id === id; }) || null;
+  }
+
+  function photoCount(state) {
+    return ensurePhotos(state).owned.length;
+  }
+
+  function hasExpedition(state) {
+    const exp = ensureExpedition(state);
+    return exp.slots.some(function (s) { return !!s; });
+  }
+
+  function slotStatus(state, index, now) {
+    const exp = ensureExpedition(state);
+    const e = exp.slots[index];
+    if (!e) return null;
+    return {
+      index: index,
+      slot: e,
+      remaining: Math.max(0, e.endsAt - now),
+      done: now >= e.endsAt
+    };
+  }
+
+  // 派遣：状态分不再拦截，快照分数留到结算判空手
+  function startExpedition(state, slotKind, tierId, now) {
+    const sd = slotDef(slotKind);
+    if (!sd) return { ok: false, reason: '未知槽位' };
+    const def = tierDef(tierId);
+    if (!def) return { ok: false, reason: '未知档位' };
+    if (!Array.isArray(def.slots) || def.slots.indexOf(sd.id) < 0) {
+      return { ok: false, reason: '这个档位不在' + sd.name };
+    }
+    if (state.level < sd.unlockLevel) {
+      return { ok: false, reason: 'Lv' + sd.unlockLevel + ' 解锁' + sd.name };
+    }
+    if (state.level < def.unlockLevel) {
+      return { ok: false, reason: 'Lv' + def.unlockLevel + ' 解锁' };
     }
 
-    state.expedition = {
+    const exp = ensureExpedition(state);
+    const index = slotIndex(sd.id);
+    if (exp.slots[index]) return { ok: false, reason: '这个槽位还在探险' };
+
+    const score = statusScore(state);
+    exp.slots[index] = {
       id: def.id,
       name: def.name,
-      startedAt: now,
+      slot: sd.id,
+      startAt: now,
       endsAt: now + def.durationSec * 1000,
-      score: score
+      score: score,
+      claimed: false
     };
-    return { ok: true, def: def };
+    return { ok: true, def: def, slot: sd.id, index: index };
   }
 
   function tierMul(score) {
@@ -252,50 +324,88 @@ HZ.State = (function () {
     return t ? t.mul : 0.6;
   }
 
-  function expeditionStatus(state, now) {
-    const e = state.expedition;
+  // 结算：空手判定看派遣时快照（状态分 <20 且时长 >=2h）；
+  // 20–39 由 tierMul 落到 0.8；照片按档位概率掉落，重复折瓜子。
+  function settleExpedition(state, index, now) {
+    const exp = ensureExpedition(state);
+    const e = exp.slots[index];
     if (!e) return null;
-    return {
-      expedition: e,
-      remaining: Math.max(0, e.endsAt - now),
-      done: now >= e.endsAt
-    };
-  }
+    if (now != null && now < e.endsAt) return null;
 
-  function settleExpedition(state) {
-    const e = state.expedition;
-    if (!e) return null;
-    const def = C.expedition.find(function (x) { return x.id === e.id; });
+    const def = tierDef(e.id);
+    if (!def) {
+      exp.slots[index] = null;
+      return null;
+    }
+
     const rules = C.expeditionRules;
     const isLong = def.durationSec >= rules.longDurationSec;
     const empty = isLong && e.score < rules.minScoreForLong;
 
     let seeds = 0;
     let material = false;
+    let photoId = null;
+    let dup = false;
+    let dupSeeds = 0;
+
     if (empty) {
       state.stats.clean = clamp(state.stats.clean - rules.emptyPenaltyClean, 100);
     } else {
       seeds = Math.round(def.seedBase * tierMul(e.score));
       material = Math.random() < def.materialRate;
       if (material) state.materials += 1;
+
+      const rate = typeof def.photoRate === 'number' ? def.photoRate : 0;
+      if (rate > 0 && Math.random() < rate) {
+        const pool = (C.photos && C.photos.pool) || [];
+        if (pool.length) {
+          const pick = pool[Math.floor(Math.random() * pool.length)];
+          photoId = pick.id;
+          const photos = ensurePhotos(state);
+          if (photos.owned.indexOf(pick.id) >= 0) {
+            dup = true;
+            dupSeeds = (C.photos && C.photos.dupSeeds) || 20;
+            state.seeds += dupSeeds;
+            photos.dupSeeds += 1;
+          } else {
+            photos.owned.push(pick.id);
+          }
+        }
+      }
     }
 
     state.seeds += seeds;
-    state.expedition = null;
+    exp.slots[index] = null;
+
+    const photo = photoId ? photoDef(photoId) : null;
     state.lastResult = {
       name: def.name,
+      slot: e.slot,
       seeds: seeds,
       material: material,
       empty: empty,
-      doubled: false
+      doubled: false,
+      photoId: photoId,
+      photoName: photo ? photo.name : '',
+      dup: dup,
+      dupSeeds: dupSeeds
     };
     return state.lastResult;
   }
 
-  // 结算页看广告翻倍（模拟）
+  function firstDoneIndex(state, now) {
+    const exp = ensureExpedition(state);
+    for (let i = 0; i < exp.slots.length; i++) {
+      const s = exp.slots[i];
+      if (s && now >= s.endsAt) return i;
+    }
+    return -1;
+  }
+
+  // 结算页看广告翻倍（模拟）：只翻瓜子基础收益，照片折算不加倍
   function doubleResult(state) {
     const r = state.lastResult;
-    if (!r || r.doubled || r.empty) return null;
+    if (!r || r.doubled || r.empty || r.seeds <= 0) return null;
     state.seeds += r.seeds;
     r.seeds *= 2;
     r.doubled = true;
@@ -325,6 +435,10 @@ HZ.State = (function () {
     state.room = data.room || base.room;
     ensureRoom(state);
 
+    // v3 结构兜底（save.read 已迁移，这里防手改档）
+    state.expedition = HZ.Save.normalizeExpedition(state.expedition);
+    state.photos = HZ.Save.normalizePhotos(state.photos);
+
     // 离线结算：0.8 系数、最多 10 小时
     tick(state, Date.now(), true);
     rollDay(state, Date.now());
@@ -343,9 +457,17 @@ HZ.State = (function () {
     actionReadyIn: actionReadyIn,
     doAction: doAction,
     startExpedition: startExpedition,
-    expeditionStatus: expeditionStatus,
+    slotStatus: slotStatus,
+    firstDoneIndex: firstDoneIndex,
+    hasExpedition: hasExpedition,
     settleExpedition: settleExpedition,
     doubleResult: doubleResult,
+    tierMul: tierMul,
+    slotDef: slotDef,
+    slotIndex: slotIndex,
+    tierDef: tierDef,
+    photoDef: photoDef,
+    photoCount: photoCount,
     canWatchAd: canWatchAd,
     markAdWatched: markAdWatched,
     ensureRoom: ensureRoom,

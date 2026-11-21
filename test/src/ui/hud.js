@@ -8,6 +8,7 @@ HZ.HUD = (function () {
 
   let panel = null; // null | 'expedition' | 'result' | 'reset' | 'shop'
   let panelAt = 0;  // 面板打开时间，用于商店底部上滑动画
+  let expTab = 'dispatch'; // 探险面板页签：'dispatch' | 'photos'
 
   function setPanel(name) {
     if (panel !== name) {
@@ -16,6 +17,11 @@ HZ.HUD = (function () {
     }
   }
   function getPanel() { return panel; }
+
+  function setExpTab(tab) {
+    if (tab === 'dispatch' || tab === 'photos') expTab = tab;
+  }
+  function getExpTab() { return expTab; }
 
   function font(ctx, size, bold) {
     ctx.font = (bold ? 'bold ' : '') + size + 'px "Microsoft YaHei", sans-serif';
@@ -90,8 +96,8 @@ HZ.HUD = (function () {
       h = 196;
       return { x: 8, y: vh - h, w: w, h: h };
     }
-    if (panel === 'expedition') { w = Math.min(360, vw - 40); h = 206; }
-    else if (panel === 'result') { w = 300; h = 168; }
+    if (panel === 'expedition') { w = Math.min(520, vw - 24); h = 246; }
+    else if (panel === 'result') { w = 320; h = 186; }
     else { w = 262; h = 122; }
     return { x: Math.round((vw - w) / 2), y: Math.round((vh - h) / 2), w: w, h: h };
   }
@@ -122,14 +128,64 @@ HZ.HUD = (function () {
     });
   }
 
-  function expeditionRows(vw, vh) {
+  // 探险面板布局：两槽卡片 + 派遣/图鉴页签。绘制与命中共用，避免错位。
+  function expeditionLayout(vw, vh) {
     const m = modalRect(vw, vh);
-    return C.expedition.map(function (e, i) {
+    const tabW = 62, tabH = 18, tabGap = 6;
+    const tabs = [
+      { kind: 'expTab', tab: 'dispatch', label: '派遣', x: m.x + 14, y: m.y + 30, w: tabW, h: tabH },
+      { kind: 'expTab', tab: 'photos', label: '图鉴', x: m.x + 14 + tabW + tabGap, y: m.y + 30, w: tabW, h: tabH }
+    ];
+
+    const padX = 12, cardGap = 10;
+    const cardW = Math.floor((m.w - padX * 2 - cardGap) / 2);
+    const cardH = m.h - 52 - 24;
+    const cards = (C.expeditionSlots || []).map(function (sd, i) {
+      const cx = m.x + padX + i * (cardW + cardGap);
+      const cy = m.y + 52;
+      const tiers = C.expedition.filter(function (e) {
+        return Array.isArray(e.slots) && e.slots.indexOf(sd.id) >= 0;
+      }).map(function (e, j) {
+        return {
+          kind: 'dispatch', slot: sd.id, id: e.id,
+          x: cx + 8, y: cy + 40 + j * 26, w: cardW - 16, h: 22
+        };
+      });
       return {
-        kind: 'dispatch', id: e.id,
-        x: m.x + 14, y: m.y + 40 + i * 38, w: m.w - 28, h: 32
+        slot: sd, index: i,
+        x: cx, y: cy, w: cardW, h: cardH,
+        tiers: tiers,
+        claim: { kind: 'claim', slot: sd.id, x: cx + 10, y: cy + cardH - 32, w: cardW - 20, h: 24 }
       };
     });
+
+    // 图鉴：4 列 × 3 行，正好 12 张
+    const pool = (C.photos && C.photos.pool) || [];
+    const cols = 4, gx = 6, gy = 6;
+    const gridX = m.x + 12, gridY = m.y + 52;
+    const cellW = Math.floor((m.w - 24 - gx * (cols - 1)) / cols);
+    const cellH = 46;
+    const cells = pool.map(function (p, i) {
+      return {
+        id: p.id,
+        x: gridX + (i % cols) * (cellW + gx),
+        y: gridY + Math.floor(i / cols) * (cellH + gy),
+        w: cellW, h: cellH
+      };
+    });
+
+    return {
+      m: m,
+      close: { x: m.x + m.w - 24, y: m.y + 6, w: 18, h: 18 },
+      tabs: tabs,
+      cards: cards,
+      cells: cells
+    };
+  }
+
+  function slotsOf(state) {
+    const exp = state.expedition;
+    return (exp && Array.isArray(exp.slots)) ? exp.slots : [null, null];
   }
 
   function resultButtons(vw, vh) {
@@ -156,11 +212,6 @@ HZ.HUD = (function () {
     ];
   }
 
-  function closeRect(vw, vh) {
-    const m = modalRect(vw, vh);
-    return { x: m.x + m.w - 24, y: m.y + 6, w: 18, h: 18 };
-  }
-
   function inRect(x, y, r) {
     return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   }
@@ -182,19 +233,48 @@ HZ.HUD = (function () {
     }
 
     if (panel === 'expedition') {
-      if (inRect(x, y, closeRect(vw, vh))) return { kind: 'closePanel' };
-      const rows = expeditionRows(vw, vh);
-      for (let i = 0; i < rows.length; i++) {
-        if (inRect(x, y, rows[i])) return { kind: 'dispatch', id: rows[i].id };
+      const L2 = expeditionLayout(vw, vh);
+      if (inRect(x, y, L2.close)) return { kind: 'closePanel' };
+      for (let i = 0; i < L2.tabs.length; i++) {
+        if (inRect(x, y, L2.tabs[i])) return { kind: 'expTab', tab: L2.tabs[i].tab };
       }
-      if (!inRect(x, y, modalRect(vw, vh))) return { kind: 'closePanel' };
+
+      if (expTab === 'photos') {
+        if (!inRect(x, y, L2.m)) return { kind: 'closePanel' };
+        return null;
+      }
+
+      const slots = slotsOf(state);
+      for (let i = 0; i < L2.cards.length; i++) {
+        const card = L2.cards[i];
+        if (!inRect(x, y, card)) continue;
+        const st = slots[card.index];
+        const unlocked = state.level >= card.slot.unlockLevel;
+        if (st) {
+          // 已完成显示领取；倒计时中点击无效
+          if (now >= st.endsAt && inRect(x, y, card.claim)) return { kind: 'claim', slot: card.slot.id };
+          return null;
+        }
+        if (!unlocked) return { kind: 'lockedSlot', slot: card.slot.id };
+        for (let j = 0; j < card.tiers.length; j++) {
+          if (inRect(x, y, card.tiers[j])) {
+            return { kind: 'dispatch', slot: card.tiers[j].slot, id: card.tiers[j].id };
+          }
+        }
+        return null;
+      }
+      if (!inRect(x, y, L2.m)) return { kind: 'closePanel' };
       return null;
     }
 
     if (panel === 'result') {
+      const r = state.lastResult || {};
       const btns = resultButtons(vw, vh);
       for (let i = 0; i < btns.length; i++) {
-        if (inRect(x, y, btns[i])) return { kind: btns[i].kind };
+        if (!inRect(x, y, btns[i])) continue;
+        // 禁用态不返回意图：空手/已翻倍/没有基础收益时点它不能白耗广告次数
+        if (btns[i].kind === 'adDouble' && (r.empty || r.doubled || r.seeds <= 0)) return null;
+        return { kind: btns[i].kind };
       }
       if (!inRect(x, y, modalRect(vw, vh))) return { kind: 'closePanel' };
       return null;
@@ -328,16 +408,42 @@ HZ.HUD = (function () {
           ctx.fillText('商店', b.x + b.w / 2, b.y + b.h / 2);
           return;
         }
-        const exp = state.expedition;
+        // 探险入口：Lv1 置灰；有已完成槽位显示「领取」；倒计时显示最早结束的那槽
+        const slots = slotsOf(state);
+        const shortUnlock = (C.expeditionSlots[0] || { unlockLevel: 2 }).unlockLevel;
+        const unlocked = state.level >= shortUnlock;
+        let running = 0;
+        let soonest = Infinity;
+        let done = false;
+        slots.forEach(function (s) {
+          if (!s) return;
+          if (now >= s.endsAt) done = true;
+          else {
+            running += 1;
+            soonest = Math.min(soonest, s.endsAt - now);
+          }
+        });
+
         let label = '探险';
-        let ready = !exp;
-        if (exp) {
-          const left = Math.max(0, exp.endsAt - now);
-          label = fmtTime(left);
+        // 旧档遗留的低等级在途订单：仍允许进面板领取，避免奖励卡死
+        let ready = unlocked || running > 0 || done;
+        let color = P.text;
+        let pulse = 0;
+        if (!unlocked && !done && running === 0) {
+          label = 'Lv' + shortUnlock + ' 解锁';
+          color = 'rgba(247,233,207,0.40)';
+        } else if (done) {
+          label = '领取';
+          color = P.yellow;
+          pulse = 0.35 + 0.4 * Math.sin(now / 240);
+        } else if (running > 0) {
+          label = fmtClock(soonest) + (running > 1 ? ' +1' : '');
+          color = P.yellow;
         }
-        buttonBase(ctx, b, ready, 0);
-        font(ctx, 11, true);
-        ctx.fillStyle = exp ? P.yellow : P.text;
+
+        buttonBase(ctx, b, ready, pulse);
+        font(ctx, unlocked && running > 0 ? 9 : 11, true);
+        ctx.fillStyle = color;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2);
@@ -375,8 +481,31 @@ HZ.HUD = (function () {
     return m + ':' + (s < 10 ? '0' + s : s);
   }
 
+  // 超过 1 小时显示 h:mm:ss，8 小时档也能读
+  function fmtClock(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return h + ':' + (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
+    return m + ':' + (s < 10 ? '0' + s : s);
+  }
+
   function drawExpTag(ctx, state, L, now) {
-    if (!state.expedition) return;
+    const slots = slotsOf(state);
+    let running = 0;
+    let soonest = Infinity;
+    let done = false;
+    slots.forEach(function (s) {
+      if (!s) return;
+      if (now >= s.endsAt) done = true;
+      else {
+        running += 1;
+        soonest = Math.min(soonest, s.endsAt - now);
+      }
+    });
+    if (!running && !done) return;
+
     const t = L.expTag;
     pixelBox(ctx, t.x, t.y, t.w, t.h, {
       fill: 'rgba(48,30,17,0.92)',
@@ -386,7 +515,10 @@ HZ.HUD = (function () {
     ctx.fillStyle = P.yellow;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('探险中 ' + fmtTime(Math.max(0, state.expedition.endsAt - now)), t.x + t.w / 2, t.y + t.h / 2);
+    const label = done
+      ? '探险归来 · 待领取'
+      : '探险中 ' + fmtClock(soonest) + (running > 1 ? ' +1' : '');
+    ctx.fillText(label, t.x + t.w / 2, t.y + t.h / 2);
   }
 
   function drawSpeed(ctx, L, speedMul) {
@@ -543,20 +675,44 @@ HZ.HUD = (function () {
     }
   }
 
+  // ---- 探险面板：派遣（双槽卡片）/ 图鉴 两个页签 ----
+  function drawExpTabs(ctx, L2) {
+    L2.tabs.forEach(function (t) {
+      const active = expTab === t.tab;
+      pixelBox(ctx, t.x, t.y, t.w, t.h, {
+        fill: active ? 'rgba(255,236,200,0.18)' : 'rgba(0,0,0,0.24)',
+        border: active ? 'rgba(242,193,78,0.80)' : 'rgba(255,236,200,0.14)'
+      });
+      font(ctx, 10, true);
+      ctx.fillStyle = active ? P.yellow : P.textDim;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(t.label, t.x + t.w / 2, t.y + t.h / 2);
+    });
+  }
+
   function drawExpeditionPanel(ctx, state, L, m, now) {
+    const L2 = expeditionLayout(L.vw, L.vh);
+    const score = HZ.State.statusScore(state);
+    const pool = (C.photos && C.photos.pool) || [];
+
     font(ctx, 13, true);
     ctx.fillStyle = P.text;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText('派遣探险', m.x + 14, m.y + 18);
+    ctx.fillText('探险', m.x + 14, m.y + 18);
 
     font(ctx, 9, false);
     ctx.fillStyle = P.textDim;
     ctx.textAlign = 'right';
-    ctx.fillText('状态分 ' + Math.round(HZ.State.statusScore(state)), m.x + m.w - 32, m.y + 18);
+    if (expTab === 'photos') {
+      ctx.fillText('照片 ' + HZ.State.photoCount(state) + '/' + pool.length, m.x + m.w - 32, m.y + 18);
+    } else {
+      ctx.fillText('状态分 ' + Math.round(score), m.x + m.w - 32, m.y + 18);
+    }
 
     // 关闭按钮
-    const c = closeRect(L.vw, L.vh);
+    const c = L2.close;
     pixelBox(ctx, c.x, c.y, c.w, c.h, {
       fill: 'rgba(255,236,200,0.10)',
       border: 'rgba(255,236,200,0.30)'
@@ -566,45 +722,214 @@ HZ.HUD = (function () {
     ctx.textAlign = 'center';
     ctx.fillText('×', c.x + c.w / 2, c.y + c.h / 2 + 1);
 
-    const score = HZ.State.statusScore(state);
-    const rows = expeditionRows(L.vw, L.vh);
-    C.expedition.forEach(function (def, i) {
-      const r = rows[i];
-      const locked = state.level < def.unlockLevel;
-      const isLong = def.durationSec >= C.expeditionRules.longDurationSec;
-      const scoreBlocked = isLong && score < C.expeditionRules.minScoreForLong;
-      const disabled = locked || scoreBlocked || !!state.expedition;
+    drawExpTabs(ctx, L2);
 
-      pixelBox(ctx, r.x, r.y, r.w, r.h, {
-        fill: disabled ? 'rgba(0,0,0,0.28)' : 'rgba(255,236,200,0.08)',
-        border: disabled ? 'rgba(255,236,200,0.06)' : 'rgba(255,236,200,0.20)'
-      });
+    if (expTab === 'photos') drawPhotoGrid(ctx, state, L2);
+    else drawDispatchCards(ctx, state, L2, now, score);
+  }
 
-      font(ctx, 10, true);
-      ctx.fillStyle = disabled ? 'rgba(247,233,207,0.40)' : P.text;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(def.name, r.x + 12, r.y + r.h / 2);
-
-      font(ctx, 9, false);
-      ctx.textAlign = 'right';
-      if (locked) {
-        ctx.fillStyle = 'rgba(247,233,207,0.38)';
-        ctx.fillText('Lv' + def.unlockLevel + ' 解锁', r.x + r.w - 12, r.y + r.h / 2);
-      } else if (scoreBlocked) {
-        ctx.fillStyle = '#ffb3a7';
-        ctx.fillText('状态分不足', r.x + r.w - 12, r.y + r.h / 2);
-      } else {
-        const est = Math.round(def.seedBase * tierMulEx(score));
-        ctx.fillStyle = P.yellow;
-        ctx.fillText('约 ' + est + ' 瓜子', r.x + r.w - 12, r.y + r.h / 2);
-      }
+  function drawDispatchCards(ctx, state, L2, now, score) {
+    const slots = slotsOf(state);
+    L2.cards.forEach(function (card) {
+      drawDispatchCard(ctx, state, slots[card.index], card, now, score);
     });
   }
 
-  function tierMulEx(score) {
-    const t = C.expeditionRules.scoreTiers.find(function (x) { return score >= x.min; });
-    return t ? t.mul : 0.6;
+  function drawDispatchCard(ctx, state, st, card, now, score) {
+    const sd = card.slot;
+    // 在途/待领取优先于等级锁定：v2 迁移来的 Lv1 订单也要能看到倒计时和领取按钮
+    const locked = !st && state.level < sd.unlockLevel;
+
+    pixelBox(ctx, card.x, card.y, card.w, card.h, {
+      fill: locked ? 'rgba(0,0,0,0.26)' : 'rgba(255,236,200,0.06)',
+      border: locked ? 'rgba(255,236,200,0.08)' : 'rgba(255,236,200,0.18)'
+    });
+
+    font(ctx, 11, true);
+    ctx.fillStyle = locked ? 'rgba(247,233,207,0.42)' : P.text;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(sd.name, card.x + 10, card.y + 16);
+
+    if (locked) {
+      font(ctx, 9, false);
+      ctx.fillStyle = 'rgba(247,233,207,0.40)';
+      ctx.fillText('Lv' + sd.unlockLevel + ' 解锁' + sd.name, card.x + 10, card.y + 42);
+      font(ctx, 8, false);
+      ctx.fillStyle = P.textDim;
+      ctx.fillText('先照顾鼠鼠升升级', card.x + 10, card.y + 60);
+      return;
+    }
+
+    if (!st) {
+      card.tiers.forEach(function (row) {
+        const def = HZ.State.tierDef(row.id);
+        if (!def) return;
+        const tierLocked = state.level < def.unlockLevel;
+        const risky = def.durationSec >= C.expeditionRules.longDurationSec &&
+          score < C.expeditionRules.minScoreForLong;
+
+        pixelBox(ctx, row.x, row.y, row.w, row.h, {
+          fill: tierLocked ? 'rgba(0,0,0,0.26)' : 'rgba(255,236,200,0.08)',
+          border: tierLocked ? 'rgba(255,236,200,0.07)' : 'rgba(255,236,200,0.20)'
+        });
+
+        font(ctx, 10, true);
+        ctx.fillStyle = tierLocked ? 'rgba(247,233,207,0.38)' : P.text;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(def.name, row.x + 8, row.y + row.h / 2);
+
+        font(ctx, 8, false);
+        ctx.textAlign = 'right';
+        if (tierLocked) {
+          ctx.fillStyle = 'rgba(247,233,207,0.38)';
+          ctx.fillText('Lv' + def.unlockLevel + ' 解锁', row.x + row.w - 8, row.y + row.h / 2);
+        } else if (risky) {
+          ctx.fillStyle = '#ffb3a7';
+          ctx.fillText('状态分低 · 可能空手', row.x + row.w - 8, row.y + row.h / 2);
+        } else {
+          ctx.fillStyle = P.yellow;
+          ctx.fillText('约 ' + Math.round(def.seedBase * HZ.State.tierMul(score)) + ' 瓜子',
+            row.x + row.w - 8, row.y + row.h / 2);
+        }
+      });
+
+      font(ctx, 8, false);
+      ctx.fillStyle = P.textDim;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('低状态也能出发，回来再算收获', card.x + card.w / 2, card.y + card.h - 10);
+      return;
+    }
+
+    // 已在探险：倒计时 / 领取
+    const done = now >= st.endsAt;
+    font(ctx, 10, true);
+    ctx.fillStyle = done ? '#9ad6a0' : P.yellow;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(done ? '鼠鼠回来了' : '探险中', card.x + 10, card.y + 44);
+
+    font(ctx, done ? 14 : 18, true);
+    ctx.fillStyle = done ? '#9ad6a0' : P.text;
+    ctx.textAlign = 'center';
+    ctx.fillText(done ? '已归来' : fmtClock(Math.max(0, st.endsAt - now)),
+      card.x + card.w / 2, card.y + 78);
+
+    font(ctx, 8, false);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'center';
+    ctx.fillText(st.name + ' · 出发时状态分 ' + Math.round(st.score),
+      card.x + card.w / 2, card.y + 104);
+
+    if (done) {
+      const b = card.claim;
+      const pulse = 0.55 + 0.35 * Math.sin(now / 240);
+      pixelBox(ctx, b.x, b.y, b.w, b.h, {
+        fill: 'rgba(242,193,78,0.92)',
+        border: 'rgba(255,236,200,' + (0.55 + pulse * 0.4).toFixed(2) + ')'
+      });
+      font(ctx, 11, true);
+      ctx.fillStyle = '#3b2416';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('领取', b.x + b.w / 2, b.y + b.h / 2);
+    } else {
+      font(ctx, 8, false);
+      ctx.fillStyle = P.textDim;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('到点后回来领取', card.x + card.w / 2, card.y + card.h - 10);
+    }
+  }
+
+  // ---- 图鉴页 ----
+  function drawPhotoGrid(ctx, state, L2) {
+    const owned = {};
+    const list = (state.photos && Array.isArray(state.photos.owned)) ? state.photos.owned : [];
+    list.forEach(function (id) { owned[id] = true; });
+    const pool = (C.photos && C.photos.pool) || [];
+
+    L2.cells.forEach(function (cell, i) {
+      const def = pool[i];
+      if (!def) return;
+      drawPhotoCell(ctx, cell, def, !!owned[def.id]);
+    });
+
+    font(ctx, 8, false);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('探险结算有概率带回照片 · 重复折算 +' +
+      ((C.photos && C.photos.dupSeeds) || 20) + ' 瓜子',
+      L2.m.x + L2.m.w / 2, L2.m.y + L2.m.h - 10);
+  }
+
+  function drawPhotoCell(ctx, cell, def, owned) {
+    pixelBox(ctx, cell.x, cell.y, cell.w, cell.h, {
+      fill: owned ? 'rgba(255,236,200,0.08)' : 'rgba(0,0,0,0.26)',
+      border: owned ? 'rgba(255,236,200,0.18)' : 'rgba(255,236,200,0.06)'
+    });
+    const aw = 34, ah = 28;
+    const ax = cell.x + 6;
+    const ay = cell.y + 6;
+    drawPhotoArt(ctx, def, ax, ay, aw, ah, owned);
+
+    font(ctx, 9, true);
+    ctx.fillStyle = owned ? P.text : 'rgba(247,233,207,0.35)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(owned ? def.name : '未收集', ax + aw + 6, cell.y + cell.h / 2);
+  }
+
+  // 代码绘制的占位照片卡：拍立得白边 + 主色块 + 简单图案
+  function drawPhotoArt(ctx, def, x, y, w, h, owned) {
+    ctx.fillStyle = owned ? '#f3e3c0' : 'rgba(247,233,207,0.10)';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = owned ? (def.color || '#c9a36b') : 'rgba(0,0,0,0.32)';
+    ctx.fillRect(x + 2, y + 2, w - 4, h - 4);
+
+    if (!owned) {
+      font(ctx, 12, true);
+      ctx.fillStyle = 'rgba(247,233,207,0.30)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', x + w / 2, y + h / 2);
+      return;
+    }
+
+    const accent = def.accent || '#8d6231';
+    const v = def.variant || 'sun';
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 2, y + 2, w - 4, h - 4);
+    ctx.clip();
+    ctx.fillStyle = accent;
+    if (v === 'sun') {
+      ctx.beginPath();
+      ctx.arc(x + w * 0.64, y + h * 0.34, Math.min(w, h) * 0.18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(x + 2, y + h - 7, w - 4, 5);
+    } else if (v === 'stripe') {
+      for (let i = 0; i < 3; i++) ctx.fillRect(x + 2, y + 6 + i * 7, w - 4, 3);
+    } else if (v === 'box') {
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 7, y + 7, w - 14, h - 14);
+      ctx.fillRect(x + 7, y + 7, w - 14, 3);
+    } else {
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        ctx.arc(x + 9 + (i % 2) * 13, y + 9 + Math.floor(i / 2) * 10, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(90,58,36,0.70)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 2.5, y + 2.5, w - 5, h - 5);
   }
 
   function drawResultPanel(ctx, state, L, m, now) {
@@ -616,28 +941,51 @@ HZ.HUD = (function () {
     ctx.textBaseline = 'middle';
     ctx.fillText('探险回来啦', m.x + m.w / 2, m.y + 22);
 
-    font(ctx, 10, false);
     ctx.textAlign = 'center';
     if (r.empty) {
+      font(ctx, 10, false);
       ctx.fillStyle = '#ffb3a7';
-      ctx.fillText('空手而归，一身泥', m.x + m.w / 2, m.y + 52);
+      ctx.fillText('空手而归，一身泥', m.x + m.w / 2, m.y + 56);
       ctx.fillStyle = P.textDim;
-      ctx.fillText('清洁 -30，洗个澡就好', m.x + m.w / 2, m.y + 70);
+      ctx.fillText('清洁 -30，洗个澡就好', m.x + m.w / 2, m.y + 76);
     } else {
-      ctx.fillStyle = P.yellow;
       font(ctx, 18, true);
+      ctx.fillStyle = P.yellow;
       ctx.fillText('+' + r.seeds + ' 瓜子', m.x + m.w / 2, m.y + 56);
+
       font(ctx, 9, false);
       ctx.fillStyle = P.textDim;
       const extra = [];
       if (r.material) extra.push('带回 1 个材料');
       if (r.doubled) extra.push('已翻倍');
       ctx.fillText(extra.length ? extra.join('　') : '鼠鼠玩得很开心', m.x + m.w / 2, m.y + 82);
+
+      // 照片卡（占位色块 + 名称）
+      if (r.photoId) {
+        const def = HZ.State.photoDef(r.photoId);
+        const text = r.dup
+          ? '重复照片 ' + r.photoName + ' 折算 +' + (r.dupSeeds || 20) + ' 瓜子'
+          : '新照片 · ' + r.photoName;
+        font(ctx, 9, true);
+        const tw = ctx.measureText(text).width;
+        const chip = 12;
+        const startX = m.x + Math.round((m.w - (tw + chip + 5)) / 2);
+        const cy = m.y + 106;
+        ctx.fillStyle = def ? (def.color || '#c9a36b') : '#c9a36b';
+        ctx.fillRect(startX, cy - chip / 2, chip, chip);
+        ctx.strokeStyle = 'rgba(255,236,200,0.55)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(startX + 0.5, cy - chip / 2 + 0.5, chip - 1, chip - 1);
+        ctx.fillStyle = r.dup ? P.textDim : P.text;
+        ctx.textAlign = 'left';
+        ctx.fillText(text, startX + chip + 5, cy + 1);
+      }
     }
 
     const btns = resultButtons(L.vw, L.vh);
     btns.forEach(function (b) {
-      const disabled = b.kind === 'adDouble' && (r.doubled || r.empty || !HZ.State.canWatchAd(state, now));
+      const disabled = b.kind === 'adDouble' &&
+        (r.doubled || r.empty || r.seeds <= 0 || !HZ.State.canWatchAd(state, now));
       pixelBox(ctx, b.x, b.y, b.w, b.h, {
         fill: disabled ? 'rgba(0,0,0,0.30)' : (b.kind === 'adDouble' ? 'rgba(178,62,52,0.92)' : 'rgba(255,236,200,0.14)'),
         border: 'rgba(255,236,200,0.28)'
@@ -691,6 +1039,8 @@ HZ.HUD = (function () {
     draw: draw,
     setPanel: setPanel,
     getPanel: getPanel,
+    setExpTab: setExpTab,
+    getExpTab: getExpTab,
     shopItems: shopItems
   };
 })();

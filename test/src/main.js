@@ -23,6 +23,7 @@ window.HZ = window.HZ || {};
   let drag = null;          // 已激活的拖拽（幽灵件跟随）
   let dragCandidate = null; // 按下但还没移动够：商店条目用来区分「点买」与「拖出」
   let reopenTimer = null;   // 落定后延迟重开商店的定时器（让 +5 特效播完）
+  let hiddenAt = 0;         // 切后台的墙钟时间，回前台按离线规则折算
 
   function clock() {
     return Date.now() + timeOffset;
@@ -87,7 +88,7 @@ window.HZ = window.HZ || {};
   }
 
   function doCare(id) {
-    if (state.expedition) {
+    if (mouse.away) {
       HZ.Effects.toast('鼠鼠出门探险了，等它回来');
       return false;
     }
@@ -122,7 +123,7 @@ window.HZ = window.HZ || {};
   };
 
   function touchObject(o) {
-    if (state.expedition) {
+    if (mouse.away) {
       HZ.Effects.toast('鼠鼠出门探险了，等它回来');
       return;
     }
@@ -144,9 +145,9 @@ window.HZ = window.HZ || {};
     });
   }
 
-  // ---------------- 探险 ----------------
-  function dispatch(id) {
-    const res = HZ.State.startExpedition(state, id, clock());
+  // ---------------- 探险（双槽） ----------------
+  function dispatch(slot, id) {
+    const res = HZ.State.startExpedition(state, slot, id, clock());
     if (!res.ok) {
       HZ.Effects.toast(res.reason);
       return;
@@ -157,23 +158,48 @@ window.HZ = window.HZ || {};
     save();
   }
 
-  function finishExpedition() {
+  // 领取某个槽位的结算：两槽都可能已完成，由玩家分别领取
+  function claimExpedition(slotKind) {
     // 拖拽收尾逻辑不能覆盖结算面板：先清掉拖拽与待重开定时器
     cancelDrag();
-    const result = HZ.State.settleExpedition(state);
-    if (!result) return;
-    mouse.away = false;
-    mouse.x = 560;
-    mouse.y = 244;
-    mouse.facing = -1;
-    HZ.Mouse.walkTo(mouse, 330, 268);
-
-    if (result.empty) {
-      HZ.Effects.toast('鼠鼠空手而归，还弄脏了');
-      HZ.Effects.spawnDust(mouse.x, mouse.y - 10, 10);
-    } else {
-      HZ.Effects.spawnStars(mouse.x, mouse.y - 60, '#ffd54f', 12);
+    const index = HZ.State.slotIndex(slotKind);
+    if (index < 0) return;
+    const result = HZ.State.settleExpedition(state, index, clock());
+    if (!result) {
+      HZ.Effects.toast('还没回来，再等等');
+      return;
     }
+
+    const remaining = HZ.State.hasExpedition(state);
+    if (!remaining) {
+      // 归宅最小表演：从左侧门口走入房间，走行动画复用 Mouse.walkTo
+      // 出门前若正在吃/玩，actT 会在 away 期冻结；先用公开 API 清掉动作与 running 标记，
+      // 否则 mouse.js 的 actT 分支会压过 walk，鼠鼠会停在门口（不改 mouse.js 内部）
+      HZ.Mouse.act(mouse, 'idle', 0);
+      mouse.away = false;
+      mouse.x = 40;
+      mouse.y = 270;
+      mouse.facing = 1;
+      HZ.Mouse.walkTo(mouse, 330, 268);
+
+      if (result.empty) {
+        HZ.Effects.toast('鼠鼠空手而归，还弄脏了');
+        HZ.Effects.spawnDust(mouse.x + 34, 258, 10);
+      } else if (result.dup) {
+        HZ.Effects.toast('收到重复照片，折算 +' + (result.dupSeeds || 20) + ' 瓜子');
+        HZ.Effects.spawnStars(mouse.x + 34, 206, '#ffd54f', 12);
+      } else {
+        HZ.Effects.toast(result.photoId ? '带回了新照片：' + result.photoName : '鼠鼠回来啦');
+        HZ.Effects.spawnStars(mouse.x + 34, 206, '#ffd54f', 12);
+      }
+    } else {
+      // 另一个槽位还在探险：鼠鼠继续留在外面，先只结算收益
+      mouse.away = true;
+      if (result.dup) {
+        HZ.Effects.toast('收到重复照片，折算 +' + (result.dupSeeds || 20) + ' 瓜子');
+      }
+    }
+
     HZ.HUD.setPanel('result');
     save();
   }
@@ -361,15 +387,38 @@ window.HZ = window.HZ || {};
         doCare(intent.id);
         break;
       case 'panel':
+        if (intent.name === 'expedition') {
+          const unlock = (HZ.CONFIG.expeditionSlots[0] || { unlockLevel: 2 }).unlockLevel;
+          // 低等级但有在途/待领取订单时仍允许进面板，避免旧档奖励卡死
+          if (state.level < unlock && !HZ.State.hasExpedition(state)) {
+            HZ.Effects.toast('Lv' + unlock + ' 解锁探险');
+            return;
+          }
+        }
         HZ.HUD.setPanel(intent.name);
         break;
       case 'closePanel':
         HZ.HUD.setPanel(null);
         break;
-      case 'dispatch':
-        dispatch(intent.id);
+      case 'expTab':
+        HZ.HUD.setExpTab(intent.tab);
         break;
+      case 'dispatch':
+        dispatch(intent.slot, intent.id);
+        break;
+      case 'claim':
+        claimExpedition(intent.slot);
+        break;
+      case 'lockedSlot': {
+        const sd = HZ.State.slotDef(intent.slot);
+        HZ.Effects.toast(sd ? ('Lv' + sd.unlockLevel + ' 解锁' + sd.name) : '还没解锁');
+        break;
+      }
       case 'adDouble':
+        if (!state.lastResult || state.lastResult.empty ||
+            state.lastResult.doubled || state.lastResult.seeds <= 0) {
+          return; // 禁用态不消耗广告次数
+        }
         if (!HZ.State.canWatchAd(state, now)) {
           HZ.Effects.toast('今天的广告次数用完了');
           return;
@@ -391,13 +440,16 @@ window.HZ = window.HZ || {};
         break;
       case 'load':
         state = HZ.State.loadOrCreate();
-        mouse.away = !!state.expedition;
+        // 读档/重置后把 lastTickAt 对齐到游戏时钟，避免 DEV 加速积累的偏移被下一帧当成离线间隔
+        state.lastTickAt = clock();
+        mouse.away = HZ.State.hasExpedition(state);
         HZ.HUD.setPanel(null);
         HZ.Effects.toast('已读档');
         break;
       case 'doReset':
         HZ.Save.clear();
         state = HZ.State.create();
+        state.lastTickAt = clock();
         mouse = HZ.Mouse.create(HZ.Scene.BANDS.groundLine);
         HZ.HUD.setPanel(null);
         HZ.Effects.clear();
@@ -408,10 +460,18 @@ window.HZ = window.HZ || {};
   }
 
   function onPointerDown(e) {
-    // 右键/中键不触发购买、拖拽或场景交互（触屏 pointerType 不是 mouse，不受影响）
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    // 丢失 pointerup 后的陈旧拖拽：新按下若已无按键，直接清理
-    if (drag && e.buttons === 0) cancelDrag();
+    // 只认主键：右键/中键/笔侧键不触发购买、拖拽或场景交互（触屏主键恒为 0）
+    if (e.button !== 0) return;
+    // 同一指针再次按下说明上一个 pointerup 丢了（触屏切后台常见），先清陈旧拖拽/候选
+    if (drag && e.pointerId === drag.pointerId) cancelDrag();
+    // 候选也有同样问题：卡片按下后 up 丢失，残留下次 up 会误买
+    if (dragCandidate && e.pointerId === dragCandidate.pointerId) cancelDrag();
+    // 若换成新指针按下而旧拖拽仍未收尾，旧 up 同样已经丢失：清掉让新触摸接管
+    const stale = drag || dragCandidate;
+    if (stale && stale.pointerId !== undefined && e.pointerId !== undefined &&
+        stale.pointerId !== e.pointerId) {
+      cancelDrag();
+    }
     // 用户开始了新的点击，取消待重开商店，避免面板突然弹出
     if (reopenTimer) clearShopReopen();
     if (drag || dragCandidate) return;
@@ -477,8 +537,8 @@ window.HZ = window.HZ || {};
   }
 
   function onPointerUp(e) {
-    // 右键/中键抬起不参与落定（例如右键点击商店卡片不得购买）
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // 只认主键抬起（触屏主键恒为 0；笔侧键、右键都不得触发购买/落定）
+    if (e.button !== 0) return;
     const c = dragCandidate || drag;
     if (!c) return;
     if (e.pointerId !== undefined && c.pointerId !== undefined && e.pointerId !== c.pointerId) return;
@@ -504,14 +564,30 @@ window.HZ = window.HZ || {};
     const dt = Math.min(0.05, (ts - lastFrame) / 1000 || 0);
     lastFrame = ts;
 
+    // 切后台不跑逻辑：时间偏移与衰减都冻结，回前台由主循环首帧按离线口径补
+    if (document.hidden) {
+      requestAnimationFrame(frame);
+      return;
+    }
+
     timeOffset += dt * 1000 * (speedMul - 1);
     const now = clock();
 
-    HZ.State.tick(state, now, false);
-
-    if (state.expedition && now >= state.expedition.endsAt) {
-      finishExpedition();
+    // 切后台折算：用一次性标记在主循环首帧补，避免 rAF 与 visibilitychange 的先后顺序导致重复计时。
+    // 只把「隐藏这段」按离线规则折（lastTickAt 拨到隐藏开始那一刻）。
+    let offlineTick = false;
+    if (hiddenAt) {
+      const hiddenMs = Math.max(0, Date.now() - hiddenAt);
+      hiddenAt = 0;
+      if (hiddenMs > 0) {
+        state.lastTickAt = Math.min(state.lastTickAt || now, now - hiddenMs);
+        offlineTick = true;
+      }
     }
+    // 兜底：漏掉 hidden 事件（例如后台标签页直接加载）时，用异常大的帧间隔判断
+    if (!offlineTick && now - (state.lastTickAt || now) > 60000) offlineTick = true;
+
+    HZ.State.tick(state, now, offlineTick);
 
     HZ.Mouse.update(mouse, dt, now);
     HZ.Effects.update(dt);
@@ -553,11 +629,9 @@ window.HZ = window.HZ || {};
     HZ.Scene.init();
     state = HZ.State.loadOrCreate();
     mouse = HZ.Mouse.create(HZ.Scene.BANDS.groundLine);
-    mouse.away = !!state.expedition;
-
-    if (state.expedition && clock() >= state.expedition.endsAt) {
-      finishExpedition();
-    }
+    mouse.away = HZ.State.hasExpedition(state);
+    // 后台标签页直接加载时不会再收到一次 hidden 事件，这里补记起点，回前台首帧按离线折算
+    if (document.hidden) hiddenAt = Date.now();
 
     window.addEventListener('resize', resize);
     window.addEventListener('orientationchange', function () {
@@ -569,10 +643,11 @@ window.HZ = window.HZ || {};
     window.addEventListener('pointercancel', cancelDrag);
     window.addEventListener('blur', cancelDrag);
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) {
-        cancelDrag(); // 切后台收不到 pointerup，清掉拖拽与待重开定时器
-        save();
-      }
+      if (!document.hidden) return; // 回前台由主循环首帧一次性折算（见 frame 里的 hiddenAt）
+      // 记下墙钟时间；主循环在后台冻结，回前台首帧只折算这一段
+      hiddenAt = Date.now();
+      cancelDrag(); // 切后台收不到 pointerup，清掉拖拽与待重开定时器
+      save();
     });
 
     lastFrame = performance.now();

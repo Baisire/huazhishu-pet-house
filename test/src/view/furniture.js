@@ -6,6 +6,15 @@ HZ.Furniture = (function () {
   const VW = 640;
   const OUTLINE = '#5A3A24';   // 占位家具统一深色描边
 
+  // 边界与存档夹紧共用 config（core 不 import view）
+  function bounds() {
+    return (HZ.CONFIG.economy && HZ.CONFIG.economy.furnitureBounds) || {
+      x: { min: 8, max: VW - 8 },
+      wall: { yMin: 48, yMax: 100, topMin: 8 },
+      ground: { yMin: 198, yMax: 258, topMin: 104 }
+    };
+  }
+
   function all() {
     return HZ.CONFIG.economy.furniture;
   }
@@ -29,15 +38,18 @@ HZ.Furniture = (function () {
     const d = def(itemId);
     if (!d) return { ok: false, reason: '未知家具' };
 
+    const b = bounds();
     const box = boxOf(d, x, y);
-    if (box.x < 8 || box.x + box.w > VW - 8) return { ok: false, reason: '这里放不下' };
+    if (box.x < b.x.min || box.x + box.w > b.x.max) return { ok: false, reason: '这里放不下' };
 
     if (d.wall) {
       // 贴墙件：底边挂在木墙上（wallBottom = 100 以上）
-      if (y < 48 || y > 100 || y - d.h < 8) return { ok: false, reason: '这里放不下' };
+      const z = b.wall;
+      if (y < z.yMin || y > z.yMax || y - d.h < z.topMin) return { ok: false, reason: '这里放不下' };
     } else {
       // 地面件：落在木屑地面上，底边不超过前景栅栏顶端（260），避免小件被栅栏挡住
-      if (y < 198 || y > 258 || y - d.h < 104) return { ok: false, reason: '这里放不下' };
+      const z = b.ground;
+      if (y < z.yMin || y > z.yMax || y - d.h < z.topMin) return { ok: false, reason: '这里放不下' };
     }
 
     const fixed = HZ.Scene.objects();

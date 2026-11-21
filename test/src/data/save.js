@@ -1,25 +1,61 @@
 // 存档：版本号 + 主槽 + 备份槽
-// v2 起新增 room（家具摆放/库存）。迁移链保持幂等。
+// v2 新增 room（家具摆放/库存）；v3 把探险单槽升级为双槽并新增照片图鉴。
+// 迁移链保持幂等：任何一版脏档经过 migrate 都能得到合法结构。
 window.HZ = window.HZ || {};
 
 HZ.Save = (function () {
   const KEY = 'huazhishu.save';
   const BAK = 'huazhishu.save.bak';
-  const VERSION = 2;
+  const VERSION = 3;
 
   function emptyRoom() {
     return { placed: [], inventory: [], placedEver: [] };
   }
 
+  function furnitureList() {
+    return (HZ.CONFIG && HZ.CONFIG.economy && HZ.CONFIG.economy.furniture) || [];
+  }
+
+  function furnitureDefById(id) {
+    if (typeof id !== 'string') return null;
+    return furnitureList().find(function (f) { return f && f.id === id; }) || null;
+  }
+
   function knownItemId(id) {
-    if (typeof id !== 'string') return false;
-    const list = (HZ.CONFIG && HZ.CONFIG.economy && HZ.CONFIG.economy.furniture) || [];
-    return list.some(function (f) { return f && f.id === id; });
+    return !!furnitureDefById(id);
+  }
+
+  // 家具边界默认值与 config 保持一致（config 缺失时也不至于崩溃）
+  function furnitureBounds() {
+    const b = HZ.CONFIG && HZ.CONFIG.economy && HZ.CONFIG.economy.furnitureBounds;
+    return b || {
+      x: { min: 8, max: 632 },
+      wall: { yMin: 48, yMax: 100, topMin: 8 },
+      ground: { yMin: 198, yMax: 258, topMin: 104 }
+    };
+  }
+
+  function clampAxis(v, lo, hi) {
+    if (lo > hi) return Math.round((lo + hi) / 2);
+    return Math.round(Math.min(hi, Math.max(lo, v)));
+  }
+
+  // 把越界坐标夹紧到合法摆放区间（不改碰撞判定；只消除「看不见但占容量」）
+  function clampPlacement(def, x, y) {
+    if (!def) return { x: x, y: y };
+    const b = furnitureBounds();
+    const half = def.w / 2;
+    const cx = clampAxis(x, b.x.min + half, b.x.max - half);
+    const zone = def.wall ? b.wall : b.ground;
+    const yLo = Math.max(zone.yMin, def.h + zone.topMin);
+    const cy = clampAxis(y, yLo, zone.yMax);
+    return { x: cx, y: cy };
   }
 
   // 脏档兜底：任何 JSON 内容都不能让绘制/命中抛异常。
   // placed 只保留 {合法 itemId, 有限 x/y}，uid 缺失或重复时重新编号；
-  // inventory 只保留已知 itemId 字符串；placedEver 去重且只保留已知 id。
+  // 越界坐标夹紧到合法区间；inventory 只保留已知 itemId；
+  // placedEver 去重且只保留已知 id。
   function normalizeRoom(room) {
     if (!room || typeof room !== 'object' || Array.isArray(room)) room = {};
 
@@ -27,14 +63,16 @@ HZ.Save = (function () {
     const valid = [];
     rawPlaced.forEach(function (p) {
       if (!p || typeof p !== 'object' || Array.isArray(p)) return;
-      if (!knownItemId(p.itemId)) return;
+      const def = furnitureDefById(p.itemId);
+      if (!def) return;
       if (typeof p.x !== 'number' || !isFinite(p.x)) return;
       if (typeof p.y !== 'number' || !isFinite(p.y)) return;
+      const pos = clampPlacement(def, p.x, p.y);
       valid.push({
         uid: typeof p.uid === 'string' ? p.uid : '',
         itemId: p.itemId,
-        x: p.x,
-        y: p.y
+        x: pos.x,
+        y: pos.y
       });
     });
 
@@ -67,6 +105,86 @@ HZ.Save = (function () {
     return { placed: placed, inventory: inventory, placedEver: placedEver };
   }
 
+  // ---------------- 探险双槽（v3） ----------------
+
+  function tierById(id) {
+    const list = (HZ.CONFIG && HZ.CONFIG.expedition) || [];
+    return list.find(function (e) { return e && e.id === id; }) || null;
+  }
+
+  function normalizeSlot(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const def = tierById(raw.id);
+    if (!def) return null;
+    // v2 用 startedAt，v3 起用 startAt；两个都认
+    const startAt = Number(raw.startAt != null ? raw.startAt : raw.startedAt);
+    const endsAt = Number(raw.endsAt);
+    if (!isFinite(startAt) || !isFinite(endsAt) || endsAt <= startAt) return null;
+
+    const tierSlots = Array.isArray(def.slots) && def.slots.length ? def.slots : ['short'];
+    let slot = (raw.slot === 'short' || raw.slot === 'long') ? raw.slot : tierSlots[0];
+    if (tierSlots.indexOf(slot) < 0) slot = tierSlots[0];
+
+    const score = Number(raw.score);
+    return {
+      id: def.id,
+      name: def.name,
+      slot: slot,
+      startAt: startAt,
+      endsAt: endsAt,
+      score: isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
+      claimed: false
+    };
+  }
+
+  // 接受 v3 { slots:[a,b] }、v2 单槽对象、v2 null、脏数组，统一返回 { slots:[a,b] }
+  // 位置按槽位种类归位（short→0 / long→1），冲突时保留先到的那条
+  function normalizeExpedition(exp) {
+    let raw = null;
+    if (Array.isArray(exp)) {
+      raw = exp;
+    } else if (exp && typeof exp === 'object') {
+      if (Array.isArray(exp.slots)) raw = exp.slots;
+      else if (typeof exp.id === 'string') raw = [exp]; // v2 旧单槽
+    }
+
+    const kinds = ((HZ.CONFIG && HZ.CONFIG.expeditionSlots) || []).map(function (s) { return s.id; });
+    const slots = [null, null];
+    (raw || []).forEach(function (item, i) {
+      const s = normalizeSlot(item);
+      if (!s) return;
+      let idx = kinds.indexOf(s.slot);
+      if (idx < 0) idx = i === 1 ? 1 : 0;
+      if (idx >= slots.length) idx = slots.length - 1;
+      if (!slots[idx]) slots[idx] = s;
+    });
+    return { slots: slots };
+  }
+
+  function photoIds() {
+    const pool = (HZ.CONFIG && HZ.CONFIG.photos && HZ.CONFIG.photos.pool) || [];
+    return pool.map(function (p) { return p && p.id; }).filter(function (id) { return typeof id === 'string'; });
+  }
+
+  function normalizePhotos(photos) {
+    const ids = photoIds();
+    const src = (photos && typeof photos === 'object' && !Array.isArray(photos) && Array.isArray(photos.owned))
+      ? photos.owned : [];
+    const seen = {};
+    const owned = [];
+    src.forEach(function (id) {
+      if (typeof id !== 'string' || seen[id] || ids.indexOf(id) < 0) return;
+      seen[id] = true;
+      owned.push(id);
+    });
+    let dupSeeds = 0;
+    if (photos && typeof photos === 'object' && !Array.isArray(photos)) {
+      const n = Number(photos.dupSeeds);
+      if (isFinite(n) && n > 0) dupSeeds = Math.floor(n);
+    }
+    return { owned: owned, dupSeeds: dupSeeds };
+  }
+
   function write(state) {
     const prev = HZ.Platform.storage.get(KEY);
     if (prev) HZ.Platform.storage.set(BAK, prev);
@@ -92,16 +210,25 @@ HZ.Save = (function () {
     }
   }
 
-  // 迁移链：v0/v1 → v2 补空 room，其余字段原样保留
+  // 迁移链：v0/v1 → v2 补空 room；v2 → v3 旧单槽按种类归入短/长槽、补 photos。
+  // 末尾统一做幂等归一，即使版本号已经是 3 也保证结构合法。
   function migrate(data) {
     if (!data || typeof data !== 'object') return null;
     if (typeof data.v !== 'number') data.v = 0;
+
     if (data.v < 2) {
       data.room = normalizeRoom(data.room);
       data.v = 2;
     }
-    // 防御性归一：即使 v 已经是 2，也保证 room 三个数组存在（幂等）
+    if (data.v < 3) {
+      data.expedition = normalizeExpedition(data.expedition);
+      data.photos = normalizePhotos(data.photos);
+      data.v = 3;
+    }
+
     data.room = normalizeRoom(data.room);
+    data.expedition = normalizeExpedition(data.expedition);
+    data.photos = normalizePhotos(data.photos);
     return data;
   }
 
@@ -110,5 +237,14 @@ HZ.Save = (function () {
     HZ.Platform.storage.remove(BAK);
   }
 
-  return { write, read, clear, VERSION, emptyRoom, normalizeRoom };
+  return {
+    write: write,
+    read: read,
+    clear: clear,
+    VERSION: VERSION,
+    emptyRoom: emptyRoom,
+    normalizeRoom: normalizeRoom,
+    normalizeExpedition: normalizeExpedition,
+    normalizePhotos: normalizePhotos
+  };
 })();
