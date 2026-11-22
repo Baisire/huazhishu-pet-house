@@ -25,6 +25,13 @@ window.HZ = window.HZ || {};
   let reopenTimer = null;   // 落定后延迟重开商店的定时器（让 +5 特效播完）
   let hiddenAt = 0;         // 切后台的墙钟时间，回前台按离线规则折算
 
+  // 新手引导运行时状态（进度不落档：tutorialDone 才落档，中途刷新会从第 1 步重来）
+  const TUT = { active: false, step: 1, suspended: false, gifted: false };
+  // 第 6 步「新手置办」固定补到 200（设计文档最便宜家具价），不随配置漂移
+  const TUTORIAL_GIFT = 200;
+  // 激励视频互斥：模拟广告有 1.2s 计时，连点不能并发起多个计时器
+  let adBusy = false;
+
   function clock() {
     return Date.now() + timeOffset;
   }
@@ -68,6 +75,77 @@ window.HZ = window.HZ || {};
     return m + ' 分 ' + (s < 10 ? '0' + s : s) + ' 秒';
   }
 
+  // ---------------- 新手引导（遮罩式，6 步） ----------------
+  function refreshGuideUnlock() {
+    HZ.HUD.setGuideUnlock(TUT.active && TUT.step === 3 ? 'short' : null);
+  }
+
+  // 新档或重置后启动。若已有在途探险（旧档升级/中途刷新），跳过前 3 步直接到「等待」，
+  // 避免第一步「摸鼠鼠」因为鼠鼠不在家而永远无法完成。
+  function startTutorial() {
+    if (HZ.State.tutorialDone(state)) {
+      TUT.active = false;
+      TUT.suspended = false;
+      HZ.HUD.setGuideUnlock(null);
+      return;
+    }
+    TUT.active = true;
+    TUT.suspended = false;
+    TUT.gifted = false;
+    TUT.step = HZ.State.hasExpedition(state) ? 4 : 1;
+    cancelDrag();
+    HZ.HUD.setPanel(null);
+    // 页签是模块状态：重置/读档后强制回到引导需要的页签，避免残留图鉴页导致第 3 步挖空落空
+    HZ.HUD.setExpTab('dispatch');
+    HZ.HUD.setTodayTab('checkin');
+    refreshGuideUnlock();
+  }
+
+  // 第 6 步需要真的买一件家具；新档没瓜子，这里按固定额度补到 200（仅引导内一次）
+  function ensureGuideGift() {
+    if (TUT.gifted) return;
+    TUT.gifted = true;
+    if (state.seeds >= TUTORIAL_GIFT) return;
+    const add = TUTORIAL_GIFT - state.seeds;
+    state.seeds = TUTORIAL_GIFT;
+    HZ.Effects.toast('新手置办：+' + add + ' 瓜子，去挑一件家具');
+    save();
+  }
+
+  function setTutorialStep(step) {
+    if (!TUT.active) return;
+    if (step > HZ.HUD.tutorialStepCount) {
+      finishTutorial('done');
+      return;
+    }
+    TUT.step = step;
+    TUT.suspended = false;
+    refreshGuideUnlock();
+    if (step === 6) ensureGuideGift();
+  }
+
+  function finishTutorial(reason) {
+    if (!TUT.active) return;
+    TUT.active = false;
+    TUT.suspended = false;
+    HZ.HUD.setGuideUnlock(null);
+    HZ.State.setTutorialDone(state);
+    save();
+    HZ.Effects.toast(reason === 'skip' ? '已跳过引导' : '引导完成，开始照顾鼠鼠吧');
+    // 每日首次进入的「今日」面板：引导结束后接上（首日不签到会漏掉留存入口）。
+    // 第 6 步刚买完家具时商店还开着，先不抢占它，关店后玩家可点顶部「今日」。
+    if (HZ.HUD.getPanel() !== 'shop' &&
+        HZ.State.ensureProgress(state).lastCheckinDate !== HZ.State.dayKey(clock())) {
+      HZ.HUD.setPanel('today');
+    }
+  }
+
+  function maybeAdvanceTutorial(actionId) {
+    if (!TUT.active) return;
+    if (TUT.step === 1 && actionId === 'pet') setTutorialStep(2);
+    else if (TUT.step === 2 && actionId === 'feed') setTutorialStep(3);
+  }
+
   // ---------------- 照料动作 ----------------
   const MOUSE_ACT = {
     feed: { state: 'eat', ms: 1400 },
@@ -109,6 +187,7 @@ window.HZ = window.HZ || {};
       HZ.Effects.toast('升级！Lv.' + state.level + ' ' + HZ.State.title(state));
       HZ.Effects.spawnStars(mouse.x, mouse.y - 90, '#ffd54f', 12);
     }
+    maybeAdvanceTutorial(id);
     save();
     return true;
   }
@@ -147,7 +226,9 @@ window.HZ = window.HZ || {};
 
   // ---------------- 探险（双槽） ----------------
   function dispatch(slot, id) {
-    const res = HZ.State.startExpedition(state, slot, id, clock());
+    // 引导第 3 步：新档 Lv1 也要能派 10 分钟档（仅引导期间放行等级限制）
+    const guide = TUT.active && TUT.step === 3;
+    const res = HZ.State.startExpedition(state, slot, id, clock(), guide ? { ignoreLevel: true } : null);
     if (!res.ok) {
       HZ.Effects.toast(res.reason);
       return;
@@ -155,6 +236,7 @@ window.HZ = window.HZ || {};
     HZ.HUD.setPanel(null);
     mouse.away = true;
     HZ.Effects.toast('鼠鼠出发啦：' + res.def.name);
+    if (guide) setTutorialStep(4);
     save();
   }
 
@@ -169,6 +251,9 @@ window.HZ = window.HZ || {};
       HZ.Effects.toast('还没回来，再等等');
       return;
     }
+
+    // 引导第 5 步：结算面板优先弹出，先挂起遮罩；收下结算后由 closePanel 续到第 6 步
+    if (TUT.active && TUT.step === 5) TUT.suspended = true;
 
     const remaining = HZ.State.hasExpedition(state);
     if (!remaining) {
@@ -211,6 +296,44 @@ window.HZ = window.HZ || {};
 
   function retrieveRect() {
     return { x: Math.round(VW / 2) - 78, y: VH - 50, w: 156, h: 38 };
+  }
+
+  // DEV 调试入口在引导期间保持可用（加速/存/读/重置，以及重置确认弹窗）
+  function devEscapesGuide(p) {
+    if (!HZ.DEV) return false;
+    const L = HZ.HUD.layout(VW, VH);
+    if (pointInRect(p, L.speed)) return true;
+    for (let i = 0; i < L.dev.length; i++) {
+      if (pointInRect(p, L.dev[i])) return true;
+    }
+    return HZ.HUD.getPanel() === 'reset';
+  }
+
+  // DEV 按钮的真实意图：命中时优先于面板分发（否则会被弹窗当成"点外面关面板"）
+  function devIntentAt(p) {
+    if (!HZ.DEV) return null;
+    const L = HZ.HUD.layout(VW, VH);
+    if (pointInRect(p, L.speed)) return { kind: 'speedToggle' };
+    for (let i = 0; i < L.dev.length; i++) {
+      const d = L.dev[i];
+      if (pointInRect(p, d)) {
+        return d.kind === 'panel' ? { kind: 'panel', name: d.name } : { kind: d.kind };
+      }
+    }
+    return null;
+  }
+
+  // 激励视频互斥入口：广告播放期间忽略新的请求，避免连点起多个计时器
+  function runRewarded(slot) {
+    if (adBusy) return Promise.resolve('skipped');
+    adBusy = true;
+    return HZ.Platform.showRewarded(slot).then(function (r) {
+      adBusy = false;
+      return r;
+    }, function (err) {
+      adBusy = false;
+      throw err;
+    });
   }
 
   // 商店条目按下：有库存就拖库存，没有库存但买得起就走「拖出即买」
@@ -276,6 +399,7 @@ window.HZ = window.HZ || {};
     }
     save();
     HZ.Effects.toast('已买下 ' + res.def.name + ' · 按住拖到房间');
+    if (TUT.active && TUT.step === 6) finishTutorial('done');
   }
 
   function afterPlace(item, first, delta) {
@@ -332,9 +456,11 @@ window.HZ = window.HZ || {};
           return;
         }
       }
-      const placed = HZ.State.placeFromInventory(state, drag.itemId, drag.x, drag.y);
-      if (placed.ok) afterPlace(placed.item, placed.first, placed.delta);
-      else {
+      const placed = HZ.State.placeFromInventory(state, drag.itemId, drag.x, drag.y, clock());
+      if (placed.ok) {
+        afterPlace(placed.item, placed.first, placed.delta);
+        if (TUT.active && TUT.step === 6) finishTutorial('done');
+      } else {
         // 极端情况下（例如容量被并发改满）购买已入库存，落定失败也要落盘
         HZ.Effects.toast(placed.reason);
         save();
@@ -389,20 +515,85 @@ window.HZ = window.HZ || {};
       case 'panel':
         if (intent.name === 'expedition') {
           const unlock = (HZ.CONFIG.expeditionSlots[0] || { unlockLevel: 2 }).unlockLevel;
-          // 低等级但有在途/待领取订单时仍允许进面板，避免旧档奖励卡死
-          if (state.level < unlock && !HZ.State.hasExpedition(state)) {
+          // 低等级但有在途/待领取订单时仍允许进面板，避免旧档奖励卡死；
+          // 引导第 3 步临时放行，让新档 Lv1 能完成「派遣 10 分钟」
+          const guideOpen = TUT.active && TUT.step === 3;
+          if (state.level < unlock && !guideOpen && !HZ.State.hasExpedition(state)) {
             HZ.Effects.toast('Lv' + unlock + ' 解锁探险');
             return;
           }
+          // 引导第 3 步必须看到 10 分钟档：残留图鉴页会挖空落空
+          if (guideOpen) HZ.HUD.setExpTab('dispatch');
         }
         HZ.HUD.setPanel(intent.name);
         break;
       case 'closePanel':
         HZ.HUD.setPanel(null);
+        // 引导第 5 步：结算面板收下后继续到第 6 步（商店）
+        if (TUT.active && TUT.suspended) setTutorialStep(TUT.step + 1);
         break;
       case 'expTab':
         HZ.HUD.setExpTab(intent.tab);
         break;
+      case 'todayTab':
+        HZ.HUD.setTodayTab(intent.tab);
+        break;
+      case 'checkinClaim': {
+        const r = HZ.State.claimCheckin(state, now);
+        if (!r.ok) {
+          HZ.Effects.toast(r.reason);
+          break;
+        }
+        HZ.Effects.toast('签到第 ' + r.day + ' 天 · +' + r.seeds + ' 瓜子');
+        HZ.Effects.spawnStars(VW / 2, VH / 2 - 30, '#ffd54f', 10);
+        save();
+        break;
+      }
+      case 'makeup': {
+        if (!HZ.State.checkinState(state, now).canMakeup) {
+          HZ.Effects.toast('今天不能补签');
+          break;
+        }
+        if (!HZ.State.canWatchAd(state, now)) {
+          HZ.Effects.toast('今天的广告次数用完了');
+          break;
+        }
+        runRewarded('checkin_makeup').then(function (r) {
+          if (r !== 'completed') return;
+          HZ.State.markAdWatched(state, clock());
+          const m = HZ.State.makeupCheckin(state, clock());
+          if (m.ok) {
+            HZ.Effects.toast('补签成功 · 连续签到接上了');
+            save();
+          }
+        });
+        break;
+      }
+      case 'claimTask': {
+        const r = HZ.State.claimTask(state, intent.id, now);
+        if (!r.ok) {
+          HZ.Effects.toast(r.reason);
+          break;
+        }
+        HZ.Effects.toast('任务完成 · +' + r.seeds + ' 瓜子');
+        save();
+        break;
+      }
+      case 'claimBonus': {
+        const r = HZ.State.claimTaskBonus(state, now);
+        if (!r.ok) {
+          HZ.Effects.toast(r.reason);
+          break;
+        }
+        HZ.Effects.toast(r.leveled > 0
+          ? ('全勤奖 +' + r.seeds + ' 瓜子 +' + r.exp + ' EXP · 升级 Lv.' + state.level)
+          : ('全勤奖 · +' + r.seeds + ' 瓜子 +' + r.exp + ' EXP'));
+        if (r.leveled > 0) {
+          HZ.Effects.spawnStars(VW / 2, VH / 2 - 30, '#ffd54f', 12);
+        }
+        save();
+        break;
+      }
       case 'dispatch':
         dispatch(intent.slot, intent.id);
         break;
@@ -423,7 +614,7 @@ window.HZ = window.HZ || {};
           HZ.Effects.toast('今天的广告次数用完了');
           return;
         }
-        HZ.Platform.showRewarded('expedition_result').then(function (r) {
+        runRewarded('expedition_result').then(function (r) {
           if (r !== 'completed') return;
           HZ.State.markAdWatched(state, clock());
           HZ.State.doubleResult(state);
@@ -444,6 +635,10 @@ window.HZ = window.HZ || {};
         state.lastTickAt = clock();
         mouse.away = HZ.State.hasExpedition(state);
         HZ.HUD.setPanel(null);
+        TUT.active = false;
+        TUT.suspended = false;
+        HZ.HUD.setGuideUnlock(null);
+        if (!HZ.State.tutorialDone(state)) startTutorial();
         HZ.Effects.toast('已读档');
         break;
       case 'doReset':
@@ -454,6 +649,8 @@ window.HZ = window.HZ || {};
         HZ.HUD.setPanel(null);
         HZ.Effects.clear();
         HZ.Effects.toast('已重置');
+        // 重置后引导重新触发（新档 tutorialDone=false）
+        startTutorial();
         save();
         break;
     }
@@ -477,8 +674,57 @@ window.HZ = window.HZ || {};
     if (drag || dragCandidate) return;
     const p = toVirtual(e.clientX, e.clientY);
 
+    // 新手引导：最先检查遮罩层。只有「跳过」「继续」和当前高亮目标放行，
+    // 其余坐标直接吞掉；DEV 调试按钮例外（需求：引导不能挡调试）。
+    // 重置确认弹窗是模态：打开时引导遮罩不拦截（否则继续按钮容差会抢走「确定重置」中心）。
+    const now = clock();
+    const devIntent = HZ.HUD.getPanel() === 'reset' ? null : devIntentAt(p);
+    const guideHit = HZ.HUD.getPanel() === 'reset' ? null : HZ.HUD.tutorialHit(p.x, p.y, TUT, state, HZ.HUD.layout(VW, VH), mouse, VW, VH, now);
+    if (guideHit) {
+      if (guideHit.kind === 'tutorialSkip') {
+        finishTutorial('skip');
+        return;
+      }
+      if (guideHit.kind === 'tutorialContinue') {
+        setTutorialStep(TUT.step + 1);
+        return;
+      }
+      // DEV 优先于"第 1 步点鼠鼠"与普通拦截：重置确认弹窗可能与鼠标挖空区重叠
+      const devPass = !!devIntent || devEscapesGuide(p);
+      if (!devPass) {
+        if (guideHit.kind === 'tutorialBlock') {
+          // 引导期间仍允许关闭探险面板 / 切页签，避免第 5 步提前开面板被困死
+          if (HZ.HUD.getPanel() === 'expedition') {
+            const r = HZ.HUD.hit(p.x, p.y, state, now, VW, VH);
+            if (r && r.kind === 'closePanel') { HZ.HUD.setPanel(null); return; }
+            if (r && r.kind === 'expTab') { HZ.HUD.setExpTab(r.tab); return; }
+          }
+          return;
+        }
+        // 第 1 步目标是鼠鼠本体：直接走抚摸，避免它恰好站在其它物件上面时命中被抢
+        if (guideHit.kind === 'tutorialPass' && TUT.step === 1) {
+          doCare('pet');
+          return;
+        }
+      }
+    }
+
+    if (devIntent) {
+      // DEV 按钮条带（y78..92）与探险/今日面板的页签（y85..105）重叠：页签优先，避免 DEV 构建下切页签被抢
+      const curPanel = HZ.HUD.getPanel();
+      if (curPanel === 'expedition' || curPanel === 'today') {
+        const tabHit = HZ.HUD.hit(p.x, p.y, state, now, VW, VH);
+        if (tabHit && (tabHit.kind === 'expTab' || tabHit.kind === 'todayTab')) {
+          handleIntent(tabHit);
+          return;
+        }
+      }
+      handleIntent(devIntent);
+      return;
+    }
+
     if (HZ.HUD.getPanel()) {
-      const r = HZ.HUD.hit(p.x, p.y, state, clock(), VW, VH);
+      const r = HZ.HUD.hit(p.x, p.y, state, now, VW, VH);
       if (HZ.HUD.getPanel() === 'shop') {
         if (!r) return;
         if (r.kind === 'closePanel') { HZ.HUD.setPanel(null); return; }
@@ -489,7 +735,7 @@ window.HZ = window.HZ || {};
       return;
     }
 
-    const hudIntent = HZ.HUD.hit(p.x, p.y, state, clock(), VW, VH);
+    const hudIntent = HZ.HUD.hit(p.x, p.y, state, now, VW, VH);
     if (hudIntent) {
       handleIntent(hudIntent);
       return;
@@ -602,7 +848,7 @@ window.HZ = window.HZ || {};
     // 拖拽幽灵件画在世界之上、HUD 之下
     if (drag) HZ.Furniture.drawGhost(bctx, drag.itemId, drag.x, drag.y, drag.valid);
 
-    HZ.HUD.draw(bctx, state, HZ.HUD.layout(VW, VH), now, speedMul);
+    HZ.HUD.draw(bctx, state, HZ.HUD.layout(VW, VH), now, speedMul, TUT.active ? TUT : null, mouse);
 
     // 拖已摆件时底部浮现「收回」投放区（盖在按钮栏之上）
     if (drag && drag.source === 'placed') drawRetrieveZone(bctx);
@@ -630,6 +876,9 @@ window.HZ = window.HZ || {};
     state = HZ.State.loadOrCreate();
     mouse = HZ.Mouse.create(HZ.Scene.BANDS.groundLine);
     mouse.away = HZ.State.hasExpedition(state);
+    // 新档首进：先引导；老玩家每日首次进入：自动弹「今日」面板
+    if (!HZ.State.tutorialDone(state)) startTutorial();
+    else if (state.progress.lastCheckinDate !== HZ.State.dayKey(clock())) HZ.HUD.setPanel('today');
     // 后台标签页直接加载时不会再收到一次 hidden 事件，这里补记起点，回前台首帧按离线折算
     if (document.hidden) hiddenAt = Date.now();
 

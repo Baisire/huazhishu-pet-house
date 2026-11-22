@@ -1,15 +1,33 @@
 // 存档：版本号 + 主槽 + 备份槽
-// v2 新增 room（家具摆放/库存）；v3 把探险单槽升级为双槽并新增照片图鉴。
+// v2 新增 room（家具摆放/库存）；v3 把探险单槽升级为双槽并新增照片图鉴；
+// v4 新增 progress（引导/签到/日常任务）。
 // 迁移链保持幂等：任何一版脏档经过 migrate 都能得到合法结构。
 window.HZ = window.HZ || {};
 
 HZ.Save = (function () {
   const KEY = 'huazhishu.save';
   const BAK = 'huazhishu.save.bak';
-  const VERSION = 3;
+  const VERSION = 4;
+  const DATE_RE = /^\d{4}-\d{1,2}-\d{1,2}$/;
+  const TASK_METRICS = ['feed', 'bath', 'exp', 'place', 'ad'];
 
   function emptyRoom() {
     return { placed: [], inventory: [], placedEver: [] };
+  }
+
+  function emptyProgress() {
+    return {
+      tutorialDone: false,
+      checkinDay: 1,
+      lastCheckinDate: '',
+      makeupDate: '',
+      tasks: {
+        day: '',
+        counts: { feed: 0, bath: 0, exp: 0, place: 0, ad: 0 },
+        claimed: [],
+        bonusClaimed: false
+      }
+    };
   }
 
   function furnitureList() {
@@ -185,6 +203,61 @@ HZ.Save = (function () {
     return { owned: owned, dupSeeds: dupSeeds };
   }
 
+  // ---------------- progress（v4：引导 / 签到 / 日常任务） ----------------
+
+  function taskIds() {
+    const list = (HZ.CONFIG && HZ.CONFIG.dailyTasks && HZ.CONFIG.dailyTasks.list) || [];
+    return list.map(function (t) { return t && t.id; }).filter(function (id) {
+      return typeof id === 'string';
+    });
+  }
+
+  function taskMetrics() {
+    const list = (HZ.CONFIG && HZ.CONFIG.dailyTasks && HZ.CONFIG.dailyTasks.list) || [];
+    const out = list.map(function (t) { return t && t.metric; }).filter(function (m) {
+      return typeof m === 'string';
+    });
+    return out.length ? out : TASK_METRICS.slice();
+  }
+
+  function cleanDate(v) {
+    return (typeof v === 'string' && DATE_RE.test(v)) ? v : '';
+  }
+
+  // 脏档兜底：progress 任何字段都收窄到合法范围，保证 HUD/核心逻辑不抛异常
+  function normalizeProgress(progress) {
+    const p = emptyProgress();
+    if (!progress || typeof progress !== 'object' || Array.isArray(progress)) return p;
+
+    p.tutorialDone = progress.tutorialDone === true;
+
+    const day = Number(progress.checkinDay);
+    if (isFinite(day) && day >= 1 && day <= 7) p.checkinDay = Math.floor(day);
+    p.lastCheckinDate = cleanDate(progress.lastCheckinDate);
+    p.makeupDate = cleanDate(progress.makeupDate);
+
+    const src = progress.tasks;
+    if (src && typeof src === 'object' && !Array.isArray(src)) {
+      p.tasks.day = cleanDate(src.day);
+      const srcCounts = (src.counts && typeof src.counts === 'object' && !Array.isArray(src.counts))
+        ? src.counts : {};
+      taskMetrics().forEach(function (metric) {
+        const n = Number(srcCounts[metric]);
+        if (isFinite(n) && n > 0) p.tasks.counts[metric] = Math.floor(n);
+      });
+
+      const ids = taskIds();
+      const seen = {};
+      (Array.isArray(src.claimed) ? src.claimed : []).forEach(function (id) {
+        if (typeof id !== 'string' || seen[id] || ids.indexOf(id) < 0) return;
+        seen[id] = true;
+        p.tasks.claimed.push(id);
+      });
+      p.tasks.bonusClaimed = src.bonusClaimed === true;
+    }
+    return p;
+  }
+
   function write(state) {
     const prev = HZ.Platform.storage.get(KEY);
     if (prev) HZ.Platform.storage.set(BAK, prev);
@@ -210,8 +283,9 @@ HZ.Save = (function () {
     }
   }
 
-  // 迁移链：v0/v1 → v2 补空 room；v2 → v3 旧单槽按种类归入短/长槽、补 photos。
-  // 末尾统一做幂等归一，即使版本号已经是 3 也保证结构合法。
+  // 迁移链：v0/v1 → v2 补空 room；v2 → v3 旧单槽按种类归入短/长槽、补 photos；
+  // v3 → v4 补空 progress（引导/签到/任务），旧数值全部保留。
+  // 末尾统一做幂等归一，即使版本号已经是最新也保证结构合法。
   function migrate(data) {
     if (!data || typeof data !== 'object') return null;
     if (typeof data.v !== 'number') data.v = 0;
@@ -225,10 +299,19 @@ HZ.Save = (function () {
       data.photos = normalizePhotos(data.photos);
       data.v = 3;
     }
+    if (data.v < 4) {
+      data.progress = normalizeProgress(data.progress);
+      // 引导只服务真正的新档（State.create 的 tutorialDone=false）。
+      // v3 及更早的玩家已经玩过，迁移时直接标记完成，避免旧档回放引导后
+      // 卡在冷却/次数用尽的步骤上。此决定由主代理拍板，状态表回写时记录。
+      data.progress.tutorialDone = true;
+      data.v = 4;
+    }
 
     data.room = normalizeRoom(data.room);
     data.expedition = normalizeExpedition(data.expedition);
     data.photos = normalizePhotos(data.photos);
+    data.progress = normalizeProgress(data.progress);
     return data;
   }
 
@@ -243,8 +326,10 @@ HZ.Save = (function () {
     clear: clear,
     VERSION: VERSION,
     emptyRoom: emptyRoom,
+    emptyProgress: emptyProgress,
     normalizeRoom: normalizeRoom,
     normalizeExpedition: normalizeExpedition,
-    normalizePhotos: normalizePhotos
+    normalizePhotos: normalizePhotos,
+    normalizeProgress: normalizeProgress
   };
 })();

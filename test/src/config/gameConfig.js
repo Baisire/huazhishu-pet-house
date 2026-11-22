@@ -7,7 +7,7 @@ window.HZ = window.HZ || {};
 HZ.DEV = true;
 
 HZ.CONFIG = {
-  version: 'test-v004',
+  version: 'test-v005',
 
   // 虚拟分辨率：高度固定 360，宽度按屏幕比例算，保证铺满不变形
   virtual: { height: 360, minWidth: 460, maxWidth: 900 },
@@ -171,6 +171,25 @@ HZ.CONFIG = {
         draw: { fill: '#8d6231', grid: '#5a3a24', bookA: '#c96b4a', bookB: '#7fbfe0', bookC: '#f0c273', dark: '#5a3a24' }
       }
     ]
+  },
+
+  // 留存三件套（test-v005）：日常任务 + 7 天签到
+  // 任务数值来源：docs/design/06-留存与增长/留存与增长.md 6.2 原表
+  dailyTasks: {
+    list: [
+      { id: 't_feed', metric: 'feed', name: '喂食 3 次', goal: 3, seeds: 30 },
+      { id: 't_bath', metric: 'bath', name: '洗澡 1 次', goal: 1, seeds: 30 },
+      { id: 't_exp', metric: 'exp', name: '完成 1 次探险', goal: 1, seeds: 40 },
+      { id: 't_place', metric: 'place', name: '摆放或更换家具 1 次', goal: 1, seeds: 25 },
+      { id: 't_ad', metric: 'ad', name: '观看 1 次激励视频', goal: 1, seeds: 25 }
+    ],
+    bonus: { name: '全部完成', seeds: 100, exp: 20 }
+  },
+
+  // 7 天签到（6.1 循环制）。第 7 天文档为皮肤碎片 ×3，皮肤系统未实现，
+  // 测试版按设计文档状态表占位为 300 瓜子。
+  checkin: {
+    days: [30, 40, 50, 60, 80, 100, 300]
   },
 
   ads: { dailyCap: 8 },

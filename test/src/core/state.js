@@ -20,6 +20,8 @@ HZ.State = (function () {
     const cooldowns = {};
     C.actions.forEach(function (a) { cooldowns[a.id] = 0; });
     const now = Date.now();
+    const progress = HZ.Save.emptyProgress();
+    progress.tasks.day = dayKey(now);
     return {
       v: HZ.Save.VERSION,
       createdAt: now,
@@ -35,7 +37,8 @@ HZ.State = (function () {
       expedition: { slots: [null, null] },
       lastResult: null,
       ad: { key: dayKey(now), count: 0 },
-      room: HZ.Save.emptyRoom()
+      room: HZ.Save.emptyRoom(),
+      progress: progress
     };
   }
 
@@ -84,9 +87,11 @@ HZ.State = (function () {
 
   // 从库存落定一件。首次摆放该款家具（placedEver 判定）开心 +5，
   // 收回重摆不再给。摆放上限不含 5 个固定物件。
-  function placeFromInventory(state, itemId, x, y) {
+  // now 用于日常任务跨天判定（不传则不做日切，避免与 DEV 加速时钟打架）。
+  function placeFromInventory(state, itemId, x, y, now) {
     const def = furnitureDef(itemId);
     if (!def) return { ok: false, reason: '未知家具' };
+    if (now != null) rollDay(state, now);
     const room = ensureRoom(state);
     const idx = room.inventory.indexOf(itemId);
     if (idx < 0) return { ok: false, reason: '库存里没有这件家具' };
@@ -110,6 +115,8 @@ HZ.State = (function () {
       state.stats.happy = clamp(before + (C.economy.placeHappy || 5), happyDef.max);
       delta = state.stats.happy - before;
     }
+    // v005 日常任务：摆放/更换家具（含「拖出即买」）计 1 次
+    bumpTask(state, 'place', 1);
     return { ok: true, item: item, first: first, delta: delta };
   }
 
@@ -132,6 +139,7 @@ HZ.State = (function () {
     return { ok: true, item: item, def: furnitureDef(item.itemId) };
   }
 
+  // 自然日切换：动作次数 / 广告次数 / 日常任务一起重置（v005）
   function rollDay(state, now) {
     const k = dayKey(now);
     if (state.daily.key !== k) {
@@ -142,10 +150,171 @@ HZ.State = (function () {
       state.ad.key = k;
       state.ad.count = 0;
     }
+    const p = ensureProgress(state);
+    if (p.tasks.day !== k) {
+      p.tasks.day = k;
+      p.tasks.counts = {};
+      p.tasks.claimed = [];
+      p.tasks.bonusClaimed = false;
+    }
   }
+
+  // ---------------- 留存三件套（v005）：引导 / 日常任务 / 签到 ----------------
+
+  // 轻量兜底：不整对象重建，避免每帧绘制时产生垃圾
+  function ensureProgress(state) {
+    let p = state.progress;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) {
+      p = HZ.Save.emptyProgress();
+      state.progress = p;
+    }
+    if (typeof p.tutorialDone !== 'boolean') p.tutorialDone = false;
+
+    const day = Number(p.checkinDay);
+    p.checkinDay = (isFinite(day) && day >= 1 && day <= 7) ? Math.floor(day) : 1;
+    if (typeof p.lastCheckinDate !== 'string') p.lastCheckinDate = '';
+    if (typeof p.makeupDate !== 'string') p.makeupDate = '';
+
+    if (!p.tasks || typeof p.tasks !== 'object' || Array.isArray(p.tasks)) {
+      p.tasks = { day: '', counts: {}, claimed: [], bonusClaimed: false };
+    }
+    const t = p.tasks;
+    if (typeof t.day !== 'string') t.day = '';
+    if (!t.counts || typeof t.counts !== 'object' || Array.isArray(t.counts)) t.counts = {};
+    if (!Array.isArray(t.claimed)) t.claimed = [];
+    if (typeof t.bonusClaimed !== 'boolean') t.bonusClaimed = false;
+    return p;
+  }
+
+  function tutorialDone(state) {
+    return ensureProgress(state).tutorialDone === true;
+  }
+
+  function setTutorialDone(state) {
+    ensureProgress(state).tutorialDone = true;
+  }
+
+  function bumpTask(state, metric, n) {
+    const p = ensureProgress(state);
+    const cur = Number(p.tasks.counts[metric]) || 0;
+    p.tasks.counts[metric] = Math.max(0, cur + (n == null ? 1 : n));
+  }
+
+  function taskDef(id) {
+    const list = (C.dailyTasks && C.dailyTasks.list) || [];
+    return list.find(function (t) { return t.id === id; }) || null;
+  }
+
+  function taskCount(state, id) {
+    const def = taskDef(id);
+    if (!def) return 0;
+    return Math.max(0, Number(ensureProgress(state).tasks.counts[def.metric]) || 0);
+  }
+
+  function taskClaimed(state, id) {
+    return ensureProgress(state).tasks.claimed.indexOf(id) >= 0;
+  }
+
+  function taskComplete(state, id) {
+    const def = taskDef(id);
+    if (!def) return false;
+    return taskCount(state, id) >= def.goal;
+  }
+
+  // 逐条领取：完成且未领过才发奖，领取即改状态（存档由 main 统一写）
+  function claimTask(state, id, now) {
+    rollDay(state, now || Date.now());
+    const def = taskDef(id);
+    if (!def) return { ok: false, reason: '未知任务' };
+    if (taskClaimed(state, id)) return { ok: false, reason: '这条已经领过了' };
+    if (!taskComplete(state, id)) return { ok: false, reason: '还没完成' };
+
+    ensureProgress(state).tasks.claimed.push(id);
+    state.seeds += def.seeds;
+    return { ok: true, def: def, seeds: def.seeds };
+  }
+
+  function allTasksClaimed(state) {
+    const list = (C.dailyTasks && C.dailyTasks.list) || [];
+    return list.length > 0 && list.every(function (t) { return taskClaimed(state, t.id); });
+  }
+
+  function taskBonusClaimed(state) {
+    return ensureProgress(state).tasks.bonusClaimed === true;
+  }
+
+  // 全勤奖：5 条都领完后才能领，额外 100 瓜子 + 20 EXP
+  function claimTaskBonus(state, now) {
+    rollDay(state, now || Date.now());
+    const bonus = (C.dailyTasks && C.dailyTasks.bonus) || { seeds: 100, exp: 20 };
+    if (taskBonusClaimed(state)) return { ok: false, reason: '全勤奖已经领过了' };
+    if (!allTasksClaimed(state)) return { ok: false, reason: '先把 5 条任务领完' };
+
+    ensureProgress(state).tasks.bonusClaimed = true;
+    state.seeds += bonus.seeds || 0;
+    const leveled = addExp(state, bonus.exp || 0);
+    return { ok: true, seeds: bonus.seeds || 0, exp: bonus.exp || 0, leveled: leveled };
+  }
+
+  // ---- 签到 ----
+  // checkinDay 语义：存档里是"下一次要领取的天数"（1–7）。
+  // checkinState 额外按 claimCheckin 的断签规则换算出"今天点签到实际会领到的天数"，
+  // 避免界面显示第 5 天、实领却是断签后的第 1 天。
+  function checkinState(state, now) {
+    const p = ensureProgress(state);
+    const tk = dayKey(now);
+    const signedToday = p.lastCheckinDate === tk;
+    const yesterday = dayKey(now - 86400000);
+    // 补签只修「昨天漏签」：最后一次签到必须正好是前天
+    const beforeYesterday = dayKey(now - 2 * 86400000);
+    const canMakeup = !signedToday && !!p.lastCheckinDate &&
+      p.lastCheckinDate === beforeYesterday && p.makeupDate !== tk;
+    const broken = !signedToday && !!p.lastCheckinDate && p.lastCheckinDate !== yesterday;
+    const claimDay = signedToday ? p.checkinDay : (broken ? 1 : p.checkinDay);
+    return {
+      signedToday: signedToday,
+      nextDay: claimDay,
+      reward: ((C.checkin && C.checkin.days) || [])[claimDay - 1] || 0,
+      canMakeup: canMakeup,
+      broken: broken
+    };
+  }
+
+  // 断签（昨天没签且前天也不是最后一次签到）回第 1 天；连签则顺延，第 7 天后循环回 1
+  function claimCheckin(state, now) {
+    rollDay(state, now);
+    const p = ensureProgress(state);
+    const tk = dayKey(now);
+    if (p.lastCheckinDate === tk) return { ok: false, reason: '今天已经签过了' };
+
+    const yesterday = dayKey(now - 86400000);
+    if (p.lastCheckinDate && p.lastCheckinDate !== yesterday) p.checkinDay = 1;
+
+    const day = p.checkinDay;
+    const seeds = ((C.checkin && C.checkin.days) || [])[day - 1] || 0;
+    state.seeds += seeds;
+    p.lastCheckinDate = tk;
+    p.checkinDay = day % 7 + 1;
+    return { ok: true, day: day, seeds: seeds };
+  }
+
+  // 广告补签：仅修昨天那一天的断签，把连续签到接上（不补发漏签那天的奖励）
+  function makeupCheckin(state, now) {
+    rollDay(state, now);
+    const p = ensureProgress(state);
+    if (!checkinState(state, now).canMakeup) return { ok: false, reason: '今天不能补签' };
+
+    p.makeupDate = dayKey(now);
+    p.lastCheckinDate = dayKey(now - 86400000);
+    p.checkinDay = p.checkinDay % 7 + 1;
+    return { ok: true, day: p.checkinDay };
+  }
+
 
   // 按时间差结算衰减。offline=true 时按 0.8 系数、最多 10 小时。
   function tick(state, now, offline) {
+    // 跨自然日自动日切：动作次数 / 广告次数 / 日常任务一起重置
+    rollDay(state, now);
     const elapsed = Math.max(0, now - (state.lastTickAt || now));
     let hours = elapsed / 3600000;
     if (offline) {
@@ -221,6 +390,9 @@ HZ.State = (function () {
     state.cooldowns[def.id] = now + def.cooldownSec * 1000;
     state.daily.counts[def.id] = used + 1;
 
+    // v005 日常任务：喂食 / 洗澡在动作成功时计数
+    if (def.id === 'feed' || def.id === 'bath') bumpTask(state, def.id, 1);
+
     const leveled = addExp(state, def.exp);
     return { ok: true, def: def, leveled: leveled };
   }
@@ -287,7 +459,8 @@ HZ.State = (function () {
   }
 
   // 派遣：状态分不再拦截，快照分数留到结算判空手
-  function startExpedition(state, slotKind, tierId, now) {
+  function startExpedition(state, slotKind, tierId, now, opts) {
+    const ignoreLevel = !!(opts && opts.ignoreLevel);
     const sd = slotDef(slotKind);
     if (!sd) return { ok: false, reason: '未知槽位' };
     const def = tierDef(tierId);
@@ -295,10 +468,11 @@ HZ.State = (function () {
     if (!Array.isArray(def.slots) || def.slots.indexOf(sd.id) < 0) {
       return { ok: false, reason: '这个档位不在' + sd.name };
     }
-    if (state.level < sd.unlockLevel) {
+    // 新手引导第 3 步需要在新档 Lv1 就能派 10 分钟档：由 main 传 ignoreLevel
+    if (!ignoreLevel && state.level < sd.unlockLevel) {
       return { ok: false, reason: 'Lv' + sd.unlockLevel + ' 解锁' + sd.name };
     }
-    if (state.level < def.unlockLevel) {
+    if (!ignoreLevel && state.level < def.unlockLevel) {
       return { ok: false, reason: 'Lv' + def.unlockLevel + ' 解锁' };
     }
 
@@ -331,6 +505,7 @@ HZ.State = (function () {
     const e = exp.slots[index];
     if (!e) return null;
     if (now != null && now < e.endsAt) return null;
+    if (now != null) rollDay(state, now);
 
     const def = tierDef(e.id);
     if (!def) {
@@ -377,6 +552,9 @@ HZ.State = (function () {
     state.seeds += seeds;
     exp.slots[index] = null;
 
+    // v005 日常任务：探险领取（含空手而归）计 1 次「完成探险」
+    bumpTask(state, 'exp', 1);
+
     const photo = photoId ? photoDef(photoId) : null;
     state.lastResult = {
       name: def.name,
@@ -420,6 +598,8 @@ HZ.State = (function () {
   function markAdWatched(state, now) {
     rollDay(state, now);
     state.ad.count += 1;
+    // v005 日常任务：任意激励视频（翻倍/补签）都算「看 1 次广告」
+    bumpTask(state, 'ad', 1);
   }
 
   function loadOrCreate() {
@@ -438,6 +618,9 @@ HZ.State = (function () {
     // v3 结构兜底（save.read 已迁移，这里防手改档）
     state.expedition = HZ.Save.normalizeExpedition(state.expedition);
     state.photos = HZ.Save.normalizePhotos(state.photos);
+    // v4 结构兜底：progress 缺失/脏字段收窄
+    state.progress = HZ.Save.normalizeProgress(data.progress);
+    ensureProgress(state);
 
     // 离线结算：0.8 系数、最多 10 小时
     tick(state, Date.now(), true);
@@ -478,6 +661,22 @@ HZ.State = (function () {
     buy: buy,
     placeFromInventory: placeFromInventory,
     movePlaced: movePlaced,
-    retrievePlaced: retrievePlaced
+    retrievePlaced: retrievePlaced,
+    dayKey: dayKey,
+    rollDay: rollDay,
+    ensureProgress: ensureProgress,
+    tutorialDone: tutorialDone,
+    setTutorialDone: setTutorialDone,
+    bumpTask: bumpTask,
+    taskCount: taskCount,
+    taskClaimed: taskClaimed,
+    taskComplete: taskComplete,
+    claimTask: claimTask,
+    allTasksClaimed: allTasksClaimed,
+    taskBonusClaimed: taskBonusClaimed,
+    claimTaskBonus: claimTaskBonus,
+    checkinState: checkinState,
+    claimCheckin: claimCheckin,
+    makeupCheckin: makeupCheckin
   };
 })();

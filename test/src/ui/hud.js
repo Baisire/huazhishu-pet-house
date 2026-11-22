@@ -6,9 +6,11 @@ HZ.HUD = (function () {
   const C = HZ.CONFIG;
   const P = C.palette;
 
-  let panel = null; // null | 'expedition' | 'result' | 'reset' | 'shop'
+  let panel = null; // null | 'expedition' | 'result' | 'reset' | 'shop' | 'today'
   let panelAt = 0;  // 面板打开时间，用于商店底部上滑动画
   let expTab = 'dispatch'; // 探险面板页签：'dispatch' | 'photos'
+  let todayTab = 'checkin'; // 今日面板页签：'checkin' | 'tasks'
+  let guideSlot = null;     // 新手引导期间临时开放的探险槽位（'short'）
 
   function setPanel(name) {
     if (panel !== name) {
@@ -22,6 +24,15 @@ HZ.HUD = (function () {
     if (tab === 'dispatch' || tab === 'photos') expTab = tab;
   }
   function getExpTab() { return expTab; }
+
+  function setTodayTab(tab) {
+    if (tab === 'checkin' || tab === 'tasks') todayTab = tab;
+  }
+  function getTodayTab() { return todayTab; }
+
+  function setGuideUnlock(slotKind) {
+    guideSlot = (slotKind === 'short' || slotKind === 'long') ? slotKind : null;
+  }
 
   function font(ctx, size, bold) {
     ctx.font = (bold ? 'bold ' : '') + size + 'px "Microsoft YaHei", sans-serif';
@@ -84,7 +95,9 @@ HZ.HUD = (function () {
       speed: { kind: 'speedToggle', x: Math.round(vw / 2) - 30, y: 8, w: 60, h: 16 },
       buttons: buttons,
       dev: dev,
-      expTag: { x: Math.round(vw / 2) - 62, y: 30, w: 124, h: 20 }
+      expTag: { x: Math.round(vw / 2) - 62, y: 30, w: 124, h: 20 },
+      // 「今日」入口：瓜子栏正下方的小按钮，不占底部按钮栏
+      today: { kind: 'panel', name: 'today', label: '今日', x: vw - 150, y: 66, w: 64, h: 18 }
     };
   }
 
@@ -98,6 +111,7 @@ HZ.HUD = (function () {
     }
     if (panel === 'expedition') { w = Math.min(520, vw - 24); h = 246; }
     else if (panel === 'result') { w = 320; h = 186; }
+    else if (panel === 'today') { w = Math.min(440, vw - 24); h = 250; }
     else { w = 262; h = 122; }
     return { x: Math.round((vw - w) / 2), y: Math.round((vh - h) / 2), w: w, h: h };
   }
@@ -188,6 +202,60 @@ HZ.HUD = (function () {
     return (exp && Array.isArray(exp.slots)) ? exp.slots : [null, null];
   }
 
+  // 今日面板布局：签到/任务两个页签。绘制与命中共用，避免动画/状态变化时错位。
+  function todayLayout(vw, vh) {
+    const m = modalRect(vw, vh);
+    const tabW = 62, tabH = 18, tabGap = 6;
+    const tabs = [
+      { kind: 'todayTab', tab: 'checkin', label: '签到', x: m.x + 14, y: m.y + 30, w: tabW, h: tabH },
+      { kind: 'todayTab', tab: 'tasks', label: '任务', x: m.x + 14 + tabW + tabGap, y: m.y + 30, w: tabW, h: tabH }
+    ];
+
+    // 签到：7 天横排
+    const days = (C.checkin && C.checkin.days) || [];
+    const gap = 6;
+    const cellW = Math.floor((m.w - 28 - gap * (days.length - 1)) / Math.max(1, days.length));
+    const cells = days.map(function (seeds, i) {
+      return {
+        day: i + 1,
+        seeds: seeds,
+        x: m.x + 14 + i * (cellW + gap),
+        y: m.y + 58,
+        w: cellW,
+        h: 74
+      };
+    });
+    const checkinClaim = { kind: 'checkinClaim', x: m.x + 14, y: m.y + m.h - 38, w: 150, h: 26 };
+    const makeup = { kind: 'makeup', x: m.x + m.w - 14 - 110, y: m.y + m.h - 38, w: 110, h: 26 };
+
+    // 任务：5 条 + 全勤奖
+    const list = (C.dailyTasks && C.dailyTasks.list) || [];
+    const rows = list.map(function (def, i) {
+      const y = m.y + 58 + i * 27;
+      return {
+        def: def,
+        x: m.x + 14, y: y, w: m.w - 28, h: 24,
+        claim: { kind: 'claimTask', id: def.id, x: m.x + m.w - 14 - 64, y: y + 2, w: 64, h: 20 }
+      };
+    });
+    const bonusY = m.y + 58 + rows.length * 27 + 4;
+    const bonus = {
+      x: m.x + 14, y: bonusY, w: m.w - 28, h: 28,
+      claim: { kind: 'claimBonus', x: m.x + m.w - 14 - 76, y: bonusY + 3, w: 76, h: 22 }
+    };
+
+    return {
+      m: m,
+      close: { x: m.x + m.w - 24, y: m.y + 6, w: 18, h: 18 },
+      tabs: tabs,
+      cells: cells,
+      checkinClaim: checkinClaim,
+      makeup: makeup,
+      rows: rows,
+      bonus: bonus
+    };
+  }
+
   function resultButtons(vw, vh) {
     const m = modalRect(vw, vh);
     const w = 104, h = 26, gap = 12;
@@ -249,7 +317,8 @@ HZ.HUD = (function () {
         const card = L2.cards[i];
         if (!inRect(x, y, card)) continue;
         const st = slots[card.index];
-        const unlocked = state.level >= card.slot.unlockLevel;
+        // 新手引导期间短途槽位临时开放（新档 Lv1 也要能派 10 分钟档）
+        const unlocked = state.level >= card.slot.unlockLevel || guideSlot === card.slot.id;
         if (st) {
           // 已完成显示领取；倒计时中点击无效
           if (now >= st.endsAt && inRect(x, y, card.claim)) return { kind: 'claim', slot: card.slot.id };
@@ -264,6 +333,28 @@ HZ.HUD = (function () {
         return null;
       }
       if (!inRect(x, y, L2.m)) return { kind: 'closePanel' };
+      return null;
+    }
+
+    if (panel === 'today') {
+      const T = todayLayout(vw, vh);
+      if (inRect(x, y, T.close)) return { kind: 'closePanel' };
+      for (let i = 0; i < T.tabs.length; i++) {
+        if (inRect(x, y, T.tabs[i])) return { kind: 'todayTab', tab: T.tabs[i].tab };
+      }
+      if (!inRect(x, y, T.m)) return { kind: 'closePanel' };
+
+      if (todayTab === 'checkin') {
+        const info = HZ.State.checkinState(state, now);
+        if (info.canMakeup && inRect(x, y, T.makeup)) return { kind: 'makeup' };
+        if (inRect(x, y, T.checkinClaim)) return { kind: 'checkinClaim' };
+        return null;
+      }
+
+      for (let i = 0; i < T.rows.length; i++) {
+        if (inRect(x, y, T.rows[i].claim)) return { kind: 'claimTask', id: T.rows[i].def.id };
+      }
+      if (inRect(x, y, T.bonus.claim)) return { kind: 'claimBonus' };
       return null;
     }
 
@@ -296,6 +387,9 @@ HZ.HUD = (function () {
         return b.kind === 'care' ? { kind: 'care', id: b.id } : { kind: 'panel', name: b.name };
       }
     }
+
+    // 顶部「今日」入口（签到 / 日常任务）
+    if (inRect(x, y, L.today)) return { kind: 'panel', name: 'today' };
 
     if (HZ.DEV) {
       if (inRect(x, y, L.speed)) return { kind: 'speedToggle' };
@@ -565,6 +659,7 @@ HZ.HUD = (function () {
 
     if (panel === 'expedition') drawExpeditionPanel(ctx, state, L, m, now);
     else if (panel === 'result') drawResultPanel(ctx, state, L, m, now);
+    else if (panel === 'today') drawTodayPanel(ctx, state, L, m, now);
     else if (panel === 'reset') drawResetPanel(ctx, L, m);
   }
 
@@ -738,7 +833,9 @@ HZ.HUD = (function () {
   function drawDispatchCard(ctx, state, st, card, now, score) {
     const sd = card.slot;
     // 在途/待领取优先于等级锁定：v2 迁移来的 Lv1 订单也要能看到倒计时和领取按钮
-    const locked = !st && state.level < sd.unlockLevel;
+    // 新手引导期间临时开放短途槽位，让新档 Lv1 能完成「派遣 10 分钟」这一步
+    const guideOpen = guideSlot === sd.id;
+    const locked = !st && state.level < sd.unlockLevel && !guideOpen;
 
     pixelBox(ctx, card.x, card.y, card.w, card.h, {
       fill: locked ? 'rgba(0,0,0,0.26)' : 'rgba(255,236,200,0.06)',
@@ -765,7 +862,7 @@ HZ.HUD = (function () {
       card.tiers.forEach(function (row) {
         const def = HZ.State.tierDef(row.id);
         if (!def) return;
-        const tierLocked = state.level < def.unlockLevel;
+        const tierLocked = state.level < def.unlockLevel && !guideOpen;
         const risky = def.durationSec >= C.expeditionRules.longDurationSec &&
           score < C.expeditionRules.minScoreForLong;
 
@@ -1023,14 +1120,512 @@ HZ.HUD = (function () {
     });
   }
 
-  function draw(ctx, state, L, now, speedMul) {
+  // ---- 今日面板：签到 / 任务 ----
+  function drawTodayTabs(ctx, T) {
+    T.tabs.forEach(function (t) {
+      const active = todayTab === t.tab;
+      pixelBox(ctx, t.x, t.y, t.w, t.h, {
+        fill: active ? 'rgba(255,236,200,0.18)' : 'rgba(0,0,0,0.24)',
+        border: active ? 'rgba(242,193,78,0.80)' : 'rgba(255,236,200,0.14)'
+      });
+      font(ctx, 10, true);
+      ctx.fillStyle = active ? P.yellow : P.textDim;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(t.label, t.x + t.w / 2, t.y + t.h / 2);
+    });
+  }
+
+  function drawTodayPanel(ctx, state, L, m, now) {
+    const T = todayLayout(L.vw, L.vh);
+
+    font(ctx, 13, true);
+    ctx.fillStyle = P.text;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('今日', m.x + 14, m.y + 18);
+
+    const info = HZ.State.checkinState(state, now);
+    font(ctx, 9, false);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'right';
+    ctx.fillText(info.signedToday ? '今日已签到' : '新的一天，先签到吧', m.x + m.w - 32, m.y + 18);
+
+    const c = T.close;
+    pixelBox(ctx, c.x, c.y, c.w, c.h, {
+      fill: 'rgba(255,236,200,0.10)',
+      border: 'rgba(255,236,200,0.30)'
+    });
+    font(ctx, 11, true);
+    ctx.fillStyle = P.text;
+    ctx.textAlign = 'center';
+    ctx.fillText('×', c.x + c.w / 2, c.y + c.h / 2 + 1);
+
+    drawTodayTabs(ctx, T);
+
+    if (todayTab === 'checkin') drawCheckinPage(ctx, state, T, info);
+    else drawTaskPage(ctx, state, T);
+  }
+
+  function drawCheckinPage(ctx, state, T, info) {
+    T.cells.forEach(function (cell) {
+      // 第 7 天领完循环回 1：这一帧仍把第 7 天显示为已签，避免"刚领完却全灰"
+      const claimed = cell.day < info.nextDay ||
+        (info.signedToday && info.nextDay === 1 && cell.day === 7);
+      const isNext = !info.signedToday && cell.day === info.nextDay;
+      const isToday = info.signedToday && cell.day === info.nextDay;
+
+      pixelBox(ctx, cell.x, cell.y, cell.w, cell.h, {
+        fill: claimed ? 'rgba(154,214,160,0.10)'
+          : (isNext ? 'rgba(242,193,78,0.16)' : 'rgba(0,0,0,0.24)'),
+        border: isNext ? 'rgba(242,193,78,0.85)'
+          : (isToday ? 'rgba(255,236,200,0.35)' : 'rgba(255,236,200,0.12)')
+      });
+
+      font(ctx, 8, true);
+      ctx.fillStyle = claimed ? '#9ad6a0' : P.textDim;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('第' + cell.day + '天', cell.x + cell.w / 2, cell.y + 14);
+
+      // 瓜子占位图标 + 数量
+      ctx.fillStyle = claimed ? 'rgba(242,193,78,0.55)' : P.yellow;
+      ctx.beginPath();
+      ctx.ellipse(cell.x + cell.w / 2, cell.y + 36, 5, 3.6, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+
+      font(ctx, cell.day === 7 ? 11 : 12, true);
+      ctx.fillStyle = claimed ? 'rgba(154,214,160,0.85)' : P.yellow;
+      ctx.fillText(String(cell.seeds), cell.x + cell.w / 2, cell.y + 54);
+
+      font(ctx, 8, false);
+      ctx.fillStyle = claimed ? '#9ad6a0' : (isNext ? P.yellow : 'rgba(247,233,207,0.42)');
+      ctx.fillText(claimed ? '已签' : (isNext ? '今天' : (cell.day === 7 ? '大奖' : '未到')),
+        cell.x + cell.w / 2, cell.y + cell.h - 10);
+    });
+
+    // 说明行
+    let tip;
+    if (info.signedToday) {
+      tip = info.nextDay === 1
+        ? '7 天一轮已完成 · 明天从第 1 天开始'
+        : '今天已签到 · 明天领第 ' + info.nextDay + ' 天';
+    } else if (info.canMakeup) {
+      tip = '昨天漏签了，可以看广告补签把连续签到接上';
+    } else {
+      tip = '签到领取第 ' + info.nextDay + ' 天奖励 · 7 天一轮循环';
+    }
+    font(ctx, 9, false);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(tip, T.m.x + T.m.w / 2, T.m.y + 152);
+
+    font(ctx, 8, false);
+    ctx.fillStyle = 'rgba(247,233,207,0.38)';
+    ctx.fillText('第 7 天为皮肤碎片占位（测试版折算 300 瓜子）', T.m.x + T.m.w / 2, T.m.y + 170);
+
+    // 签到按钮
+    const b = T.checkinClaim;
+    const disabled = info.signedToday;
+    pixelBox(ctx, b.x, b.y, b.w, b.h, {
+      fill: disabled ? 'rgba(0,0,0,0.30)' : 'rgba(242,193,78,0.92)',
+      border: disabled ? 'rgba(255,236,200,0.16)' : 'rgba(255,236,200,0.85)'
+    });
+    font(ctx, 10, true);
+    ctx.fillStyle = disabled ? 'rgba(247,233,207,0.38)' : '#3b2416';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(disabled ? '今日已签' : ('签到第 ' + info.nextDay + ' 天 · +' + info.reward),
+      b.x + b.w / 2, b.y + b.h / 2);
+
+    // 补签按钮：仅「昨天漏签」时出现
+    if (info.canMakeup) {
+      const mk = T.makeup;
+      pixelBox(ctx, mk.x, mk.y, mk.w, mk.h, {
+        fill: 'rgba(178,62,52,0.90)',
+        border: 'rgba(255,190,170,0.70)'
+      });
+      font(ctx, 10, true);
+      ctx.fillStyle = P.text;
+      ctx.fillText('看广告补签', mk.x + mk.w / 2, mk.y + mk.h / 2);
+    }
+  }
+
+  function drawTaskPage(ctx, state, T) {
+    T.rows.forEach(function (row) {
+      const def = row.def;
+      const count = HZ.State.taskCount(state, def.id);
+      const claimed = HZ.State.taskClaimed(state, def.id);
+      const done = count >= def.goal;
+
+      pixelBox(ctx, row.x, row.y, row.w, row.h, {
+        fill: claimed ? 'rgba(255,236,200,0.04)'
+          : (done ? 'rgba(255,236,200,0.10)' : 'rgba(0,0,0,0.22)'),
+        border: claimed ? 'rgba(255,236,200,0.08)'
+          : (done ? 'rgba(242,193,78,0.55)' : 'rgba(255,236,200,0.12)')
+      });
+
+      font(ctx, 9, true);
+      ctx.fillStyle = claimed ? P.textDim : P.text;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(def.name, row.x + 8, row.y + row.h / 2);
+
+      font(ctx, 9, true);
+      ctx.fillStyle = done ? '#9ad6a0' : P.textDim;
+      ctx.fillText(Math.min(count, def.goal) + '/' + def.goal, row.x + 158, row.y + row.h / 2);
+
+      font(ctx, 9, true);
+      ctx.fillStyle = P.yellow;
+      ctx.fillText('+' + def.seeds + ' 瓜子', row.x + 216, row.y + row.h / 2);
+
+      const b = row.claim;
+      pixelBox(ctx, b.x, b.y, b.w, b.h, {
+        fill: claimed ? 'rgba(0,0,0,0.28)' : (done ? 'rgba(242,193,78,0.92)' : 'rgba(0,0,0,0.28)'),
+        border: claimed ? 'rgba(255,236,200,0.10)'
+          : (done ? 'rgba(255,236,200,0.80)' : 'rgba(255,236,200,0.14)')
+      });
+      font(ctx, 9, true);
+      ctx.fillStyle = claimed ? 'rgba(247,233,207,0.35)'
+        : (done ? '#3b2416' : 'rgba(247,233,207,0.42)');
+      ctx.textAlign = 'center';
+      ctx.fillText(claimed ? '已领取' : (done ? '领取' : '进行中'),
+        b.x + b.w / 2, b.y + b.h / 2);
+    });
+
+    // 全勤奖
+    const bonus = T.bonus;
+    const bonusDef = (C.dailyTasks && C.dailyTasks.bonus) || { seeds: 100, exp: 20 };
+    const bonusClaimed = HZ.State.taskBonusClaimed(state);
+    const allClaimed = HZ.State.allTasksClaimed(state);
+
+    pixelBox(ctx, bonus.x, bonus.y, bonus.w, bonus.h, {
+      fill: bonusClaimed ? 'rgba(255,236,200,0.04)'
+        : (allClaimed ? 'rgba(242,193,78,0.14)' : 'rgba(0,0,0,0.24)'),
+      border: allClaimed && !bonusClaimed ? 'rgba(242,193,78,0.70)' : 'rgba(255,236,200,0.12)'
+    });
+    font(ctx, 9, true);
+    ctx.fillStyle = allClaimed ? P.yellow : P.text;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('全勤奖', bonus.x + 8, bonus.y + bonus.h / 2);
+    font(ctx, 8, false);
+    ctx.fillStyle = P.textDim;
+    ctx.fillText('5 条任务全部领取', bonus.x + 52, bonus.y + bonus.h / 2);
+
+    const bb = bonus.claim;
+    pixelBox(ctx, bb.x, bb.y, bb.w, bb.h, {
+      fill: bonusClaimed ? 'rgba(0,0,0,0.28)'
+        : (allClaimed ? 'rgba(242,193,78,0.92)' : 'rgba(0,0,0,0.28)'),
+      border: bonusClaimed ? 'rgba(255,236,200,0.10)'
+        : (allClaimed ? 'rgba(255,236,200,0.80)' : 'rgba(255,236,200,0.14)')
+    });
+    font(ctx, 9, true);
+    ctx.fillStyle = bonusClaimed ? 'rgba(247,233,207,0.35)'
+      : (allClaimed ? '#3b2416' : 'rgba(247,233,207,0.42)');
+    ctx.textAlign = 'center';
+    ctx.fillText(bonusClaimed ? '已领取' : (allClaimed ? '领奖' : '未解锁'),
+      bb.x + bb.w / 2, bb.y + bb.h / 2);
+
+    font(ctx, 8, false);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'right';
+    ctx.fillText('+' + (bonusDef.seeds || 100) + ' 瓜子 +' + (bonusDef.exp || 20) + ' EXP',
+      bb.x - 8, bonus.y + bonus.h / 2);
+  }
+
+  // ---- 新手引导：遮罩 + 挖空高亮 + 气泡 ----
+  const TUTORIAL_STEPS = [
+    { title: '欢迎来到小屋', text: '先摸摸鼠鼠，和它打个招呼', target: 'mouse' },
+    { title: '喂饱它', text: '点下面的「喂食」，给鼠鼠添点粮', target: 'care:feed' },
+    { title: '第一次探险', text: '点「探险」，选 10 分钟档派它出门', panelText: '选「10 分钟」档，派它出门', target: 'panel:expedition' },
+    { title: '耐心等一等', text: '探险进行中，可以先跳过等待；回来记得领奖励', target: 'none', continueLabel: '继续' },
+    { title: '领取战利品', text: '鼠鼠回来了，点「探险」把奖励收下', panelText: '等鼠鼠回来，点「领取」收下战利品', target: 'panel:expedition' },
+    { title: '布置小屋', text: '点「商店」，买一件喜欢的家具放起来', panelText: '挑一件家具买下，就能开始布置啦', target: 'panel:shop' }
+  ];
+
+  // 与 Mouse.hitTest 使用同一套尺寸公式，保证高亮框和真实命中一致
+  function mouseRect(mouse) {
+    if (!mouse) return null;
+    const img = HZ.Assets.get('mouse');
+    const ih = img ? (img.naturalHeight || img.height || 1) : 1;
+    const iw = img ? (img.naturalWidth || img.width || 1) : 1;
+    const depth = (mouse.y - 188) / (320 - 188);
+    const t = Math.max(0, Math.min(1, depth));
+    const h = 96 * (0.92 + t * 0.14);
+    const w = Math.round(h * iw / ih);
+    return { x: Math.round(mouse.x - w / 2), y: Math.round(mouse.y - h), w: w, h: Math.round(h + 6) };
+  }
+
+  function findButton(L, kind, key) {
+    return L.buttons.find(function (b) {
+      return b.kind === kind && (b.id === key || b.name === key);
+    }) || null;
+  }
+
+  function rectOf(b) {
+    return b ? { x: b.x, y: b.y, w: b.w, h: b.h } : null;
+  }
+
+  function tutorialHole(step, state, L, mouse, vw, vh, now) {
+    const def = TUTORIAL_STEPS[step - 1];
+    if (!def) return null;
+
+    if (def.target === 'mouse') {
+      const r = mouseRect(mouse);
+      return r ? { x: r.x - 4, y: r.y - 4, w: r.w + 8, h: r.h + 8 } : null;
+    }
+    if (def.target.indexOf('care:') === 0) {
+      return rectOf(findButton(L, 'care', def.target.slice(5)));
+    }
+    if (def.target === 'panel:expedition') {
+      if (panel === 'expedition') {
+        const L2 = expeditionLayout(vw, vh);
+        if (step === 3) {
+          // 只放行短途卡的「10 分钟」那一行
+          const card = L2.cards[0];
+          if (!card) return modalRect(vw, vh);
+          return card.tiers[0] ? rectOf(card.tiers[0]) : rectOf(card);
+        }
+        // 第 5 步：已完成槽优先于在途槽（旧档可能只有长途槽在跑/已回来）
+        const slots = (state && state.expedition && Array.isArray(state.expedition.slots))
+          ? state.expedition.slots : [];
+        const doneAt = now == null ? -1 : slots.findIndex(function (s) {
+          return !!s && now >= s.endsAt;
+        });
+        let idx = doneAt;
+        if (idx < 0) idx = slots.findIndex(function (s) { return !!s; });
+        if (idx < 0) idx = 0;
+        return rectOf(L2.cards[idx]) || modalRect(vw, vh);
+      }
+      return rectOf(findButton(L, 'panel', 'expedition'));
+    }
+    if (def.target === 'panel:shop') {
+      if (panel === 'shop') {
+        // 与 drawShopPanel/HUD.hit 用同一个上滑偏移，动画期间挖空不落在终态位置
+        const m = modalRect(vw, vh);
+        const yOff = shopSlideOffset(m);
+        return { x: m.x, y: m.y + yOff, w: m.w, h: m.h };
+      }
+      return rectOf(findButton(L, 'panel', 'shop'));
+    }
+    return null;
+  }
+
+  function wrapChars(text, maxChars) {
+    const lines = [];
+    let line = '';
+    for (let i = 0; i < text.length; i++) {
+      const ch = text.charAt(i);
+      if (ch === '\n') { lines.push(line); line = ''; continue; }
+      if (line.length >= maxChars) { lines.push(line); line = ''; }
+      line += ch;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  // 越过按钮统一从这里取矩形：drawTutorial 与 tutorialHit 都只读 continueBtn，
+  // 避免"绘制位置/命中位置"各算一套（v003 P2-1 同类问题）。
+  function tutorialContinueRect(bubble, bh, label) {
+    return {
+      kind: 'tutorialContinue', label: label,
+      x: bubble.x + bubble.w - 92,
+      y: bubble.y + bh - 28,
+      w: 80, h: 22
+    };
+  }
+
+  function tutorialLayout(step, state, L, mouse, vw, vh, now) {
+    const def = TUTORIAL_STEPS[step - 1] || TUTORIAL_STEPS[0];
+    const hole = tutorialHole(step, state, L, mouse, vw, vh, now);
+    const panelOpen = (def.target === 'panel:expedition' && panel === 'expedition') ||
+      (def.target === 'panel:shop' && panel === 'shop');
+    const text = (panelOpen && def.panelText) ? def.panelText : def.text;
+
+    const bw = 300;
+    const lines = wrapChars(text, Math.floor((bw - 20) / 9));
+    const hasContinue = !!def.continueLabel;
+    const bh = 12 + 14 + lines.length * 13 + (hasContinue ? 32 : 0);
+
+    let bx, by;
+    if (!hole) {
+      bx = Math.round((vw - bw) / 2);
+      by = Math.round(vh / 2 - bh / 2);
+    } else if (panel === 'expedition' && (step === 3 || step === 5)) {
+      // 探险面板占据中部，气泡放顶部空档（弹窗之上绘制，不会被压暗）
+      bx = Math.round((vw - bw) / 2);
+      by = 4;
+    } else if (panel === 'shop' && step === 6) {
+      // 商店滑入动画期间 hole 会移动；气泡固定放在终态面板上方，避免跟着抖动
+      const fm = modalRect(vw, vh);
+      bx = Math.round((vw - bw) / 2);
+      by = Math.max(6, fm.y - bh - 14);
+    } else {
+      bx = Math.round(hole.x + hole.w / 2 - bw / 2);
+      bx = Math.max(8, Math.min(vw - bw - 8, bx));
+      by = hole.y - bh - 14;
+      if (by < 6) by = hole.y + hole.h + 14;
+      by = Math.max(6, Math.min(vh - bh - 6, by));
+    }
+
+    const bubble = { x: bx, y: by, w: bw, h: bh };
+    const continueBtn = hasContinue ? tutorialContinueRect(bubble, bh, def.continueLabel) : null;
+
+    return {
+      def: def, step: step, hole: hole, bubble: bubble, lines: lines,
+      continueBtn: continueBtn,
+      skip: { kind: 'tutorialSkip', x: vw - 64, y: 70, w: 56, h: 20 }
+    };
+  }
+
+  // 引导命中：只有跳过 / 继续 / 当前高亮目标放行，其余坐标由 main 吞掉
+  function tutorialHit(x, y, tut, state, L, mouse, vw, vh, now) {
+    if (!tut || !tut.active || tut.suspended) return null;
+    const G = tutorialLayout(tut.step, state, L, mouse, vw, vh, now);
+    if (inRect(x, y, G.skip)) return { kind: 'tutorialSkip' };
+    const c = G.continueBtn;
+    // 继续按钮四周留 6px 触摸容差，视觉矩形仍以 continueBtn 为准
+    if (c && x >= c.x - 6 && x <= c.x + c.w + 6 && y >= c.y - 6 && y <= c.y + c.h + 6) {
+      return { kind: 'tutorialContinue' };
+    }
+    if (G.hole && inRect(x, y, G.hole)) return { kind: 'tutorialPass' };
+    return { kind: 'tutorialBlock' };
+  }
+
+  // 只画遮罩与挖空边框（在弹窗之下）；气泡/跳过单独画在弹窗之上，避免被压暗
+  function drawTutorialShade(ctx, state, L, now, tut, mouse) {
+    const G = tutorialLayout(tut.step, state, L, mouse, L.vw, L.vh, now);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, L.vw, L.vh);
+    if (G.hole) ctx.rect(G.hole.x, G.hole.y, G.hole.w, G.hole.h);
+    ctx.fillStyle = 'rgba(14,9,5,0.66)';
+    ctx.fill('evenodd');
+
+    if (G.hole) {
+      const pulse = 0.55 + 0.35 * Math.sin(now / 220);
+      ctx.strokeStyle = 'rgba(242,193,78,' + pulse.toFixed(2) + ')';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(G.hole.x - 1, G.hole.y - 1, G.hole.w + 2, G.hole.h + 2);
+    }
+    ctx.restore();
+  }
+
+  function drawTutorialBubble(ctx, state, L, now, tut, mouse) {
+    const G = tutorialLayout(tut.step, state, L, mouse, L.vw, L.vh, now);
+    const b = G.bubble;
+
+    ctx.save();
+    pixelBox(ctx, b.x, b.y, b.w, b.h, {
+      fill: 'rgba(48,30,17,0.97)',
+      border: 'rgba(242,193,78,0.85)'
+    });
+
+    font(ctx, 11, true);
+    ctx.fillStyle = P.yellow;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(G.def.title, b.x + 10, b.y + 16);
+
+    font(ctx, 8, false);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'right';
+    ctx.fillText(G.step + '/' + TUTORIAL_STEPS.length, b.x + b.w - 10, b.y + 16);
+
+    font(ctx, 9, false);
+    ctx.fillStyle = P.text;
+    ctx.textAlign = 'left';
+    G.lines.forEach(function (line, i) {
+      ctx.fillText(line, b.x + 10, b.y + 32 + i * 13);
+    });
+
+    // 继续按钮：矩形只从 G.continueBtn 取，绘制/命中同源
+    if (G.continueBtn) {
+      const c = G.continueBtn;
+      pixelBox(ctx, c.x, c.y, c.w, c.h, {
+        fill: 'rgba(242,193,78,0.92)',
+        border: 'rgba(255,236,200,0.85)'
+      });
+      font(ctx, 10, true);
+      ctx.fillStyle = '#3b2416';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(c.label, c.x + c.w / 2, c.y + c.h / 2);
+    }
+
+    const s = G.skip;
+    pixelBox(ctx, s.x, s.y, s.w, s.h, {
+      fill: 'rgba(30,19,11,0.92)',
+      border: 'rgba(255,236,200,0.30)'
+    });
+    font(ctx, 9, true);
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('跳过', s.x + s.w / 2, s.y + s.h / 2);
+    ctx.restore();
+  }
+
+  // 目标在弹窗内部时，弹窗会盖住遮罩层的挖空边框；这里在弹窗之上补一圈高亮，
+  // 只画目标框、不重画遮罩，保持「引导层在弹窗之下」的层级约定。
+  function drawTutorialTargetRing(ctx, state, L, now, tut, mouse) {
+    if (panel !== 'expedition' && panel !== 'shop') return;
+    const G = tutorialLayout(tut.step, state, L, mouse, L.vw, L.vh, now);
+    if (!G.hole) return;
+    const m = modalRect(L.vw, L.vh);
+    const inside = G.hole.x >= m.x - 1 && G.hole.y >= m.y - 1 &&
+      G.hole.x + G.hole.w <= m.x + m.w + 1 && G.hole.y + G.hole.h <= m.y + m.h + 1;
+    if (!inside) return;
+    if (G.hole.w >= m.w - 2 && G.hole.h >= m.h - 2) return;
+    if (panel === 'shop') return; // 商店整块都是可点区，不再套局部框
+
+    const pulse = 0.55 + 0.35 * Math.sin(now / 220);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(242,193,78,' + pulse.toFixed(2) + ')';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(G.hole.x - 1, G.hole.y - 1, G.hole.w + 2, G.hole.h + 2);
+    ctx.restore();
+  }
+
+  function drawTodayButton(ctx, state, L, now) {
+    const b = L.today;
+    const info = HZ.State.checkinState(state, now);
+    pixelBox(ctx, b.x, b.y, b.w, b.h, {
+      fill: 'rgba(48,30,17,0.86)',
+      border: info.signedToday ? 'rgba(232,196,138,0.35)' : 'rgba(242,193,78,0.80)'
+    });
+    font(ctx, 9, true);
+    ctx.fillStyle = info.signedToday ? P.textDim : P.yellow;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('今日', b.x + b.w / 2, b.y + b.h / 2);
+
+    if (!info.signedToday) {
+      ctx.fillStyle = '#ff6b6b';
+      ctx.beginPath();
+      ctx.arc(b.x + b.w - 6, b.y + 5, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function draw(ctx, state, L, now, speedMul, tut, mouse) {
     drawStats(ctx, state, L, now);
     drawRight(ctx, state, L);
     drawExpTag(ctx, state, L, now);
+    drawTodayButton(ctx, state, L, now);
     drawButtons(ctx, state, L, now);
     drawSpeed(ctx, L, speedMul);
     drawDev(ctx, L);
+    // 引导遮罩在 HUD 之上、弹窗之下；气泡/跳过在弹窗之上（步骤 3/5/6 不被压暗）
+    if (tut && tut.active && !tut.suspended) drawTutorialShade(ctx, state, L, now, tut, mouse);
     drawModal(ctx, state, L, now);
+    if (tut && tut.active && !tut.suspended) {
+      drawTutorialBubble(ctx, state, L, now, tut, mouse);
+      drawTutorialTargetRing(ctx, state, L, now, tut, mouse);
+    }
   }
 
   return {
@@ -1041,6 +1636,14 @@ HZ.HUD = (function () {
     getPanel: getPanel,
     setExpTab: setExpTab,
     getExpTab: getExpTab,
+    setTodayTab: setTodayTab,
+    getTodayTab: getTodayTab,
+    setGuideUnlock: setGuideUnlock,
+    todayLayout: todayLayout,
+    tutorialLayout: tutorialLayout,
+    tutorialHit: tutorialHit,
+    tutorialSteps: TUTORIAL_STEPS,
+    tutorialStepCount: TUTORIAL_STEPS.length,
     shopItems: shopItems
   };
 })();
